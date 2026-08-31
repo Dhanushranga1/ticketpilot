@@ -250,7 +250,7 @@
 | BYOK AI System | ✅ | DB config, UI settings, provider-agnostic |
 | RAG Pipeline Fixes | ✅ | MMR auto-disable, faiss_id sync, MOC removal |
 | **A — Tests & CI** | ✅ | 105 backend + 28 frontend tests pass. Coverage 50%/44%/45%/52% (threshold 40%). |
-| B — pgvector | ⬜ | Parallelize with A. Kill FAISS. |
+| B — pgvector | ✅ | Migration 0031, rag.py/kb.py/tickets.py switched, FAISS stripped from startup, in-memory fallback. |
 | C — Cost/Quota | ⬜ | After B (re-embed removal overlaps). |
 | D — UI Polish | ⬜ | Half-built pages, dead links, rebrand. |
 | E — AI + Agents | ⬜ | Draft reply + KB-from-ticket actions. |

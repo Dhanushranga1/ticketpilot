@@ -907,11 +907,10 @@ def chat_with_ai(
     clean_query = scrub(payload.query)
     observer.record_embedding_metrics(clean_query, 0)  # Will update with actual timing
 
-    # 4) Retrieve relevant chunks using enhanced RAG with metrics
+    # 4) Retrieve relevant chunks using pgvector search
     retrieval_start = time.time()
     retrieval_result = retrieve(
         clean_query,
-        lambda faiss_ids: fetch_chunks_by_faiss_ids(faiss_ids, org_id),
         org_id=org_id,
     )
     retrieval_latency = int((time.time() - retrieval_start) * 1000)

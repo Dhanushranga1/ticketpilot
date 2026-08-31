@@ -21,7 +21,6 @@ from .db_sync import get_db_connection
 from .embeddings import embed_texts_async
 from .entitlements import requires_feature
 from .org_middleware import require_org_context
-from .store import add_org_vectors, search_org_vectors
 from .utils import normalize_text, sha256, sniff_and_read
 
 _log = logging.getLogger(__name__)
@@ -151,48 +150,24 @@ async def ingest(
             if not unique_chunks:
                 raise HTTPException(400, "All chunks were duplicates")
 
-            # 5) Generate embeddings and add to FAISS
+            # 5) Generate embeddings and store in pgvector column
             _log.info("[kb] starting embed_texts for %d chunks", len(unique_chunks))
             vectors = await embed_texts_async(unique_chunks)
-            _log.info("[kb] embed_texts done; adding to FAISS")
-            assigned_faiss_ids = add_org_vectors(org_id, unique_ids, vectors)
-            _log.info(
-                "[kb] FAISS add done (%d ids); updating DB", len(assigned_faiss_ids)
-            )
+            _log.info("[kb] embed_texts done; writing to pgvector")
 
-            # 6) Update chunks with FAISS IDs and persist raw vectors for cold-start rebuild
-            for idx_i, (chunk_id, faiss_id, vec) in enumerate(
-                zip(unique_ids, assigned_faiss_ids, vectors)
+            # 6) Update chunks with embedding vectors
+            for idx_i, (chunk_id, vec) in enumerate(
+                zip(unique_ids, vectors)
             ):
                 _log.info("[kb] DB update chunk %d/%d", idx_i + 1, len(unique_ids))
                 cur.execute(
-                    "UPDATE app.chunks SET faiss_id = %s, embedding = %s::float4[] WHERE id = %s::uuid",
-                    (faiss_id, list(vec), chunk_id),
+                    "UPDATE app.chunks SET embedding_vec = %s::vector, embedding = %s::float4[] WHERE id = %s::uuid",
+                    (str(list(vec)), list(vec), chunk_id),
                 )
 
             _log.info("[kb] all updates done; committing")
             conn.commit()
             _log.info("[kb] commit done")
-
-            # Refresh per-org snapshot in background so next cold start is fast
-            import threading
-
-            _snapshot_org = org_id
-
-            def _save_snapshot():
-                import asyncio as _asyncio
-
-                from .store import get_org_index
-                from .store import save_org_snapshot as _snap
-
-                try:
-                    idx = get_org_index(_snapshot_org)
-                    if idx is not None:
-                        _asyncio.run(_snap(_snapshot_org, idx, idx.ntotal))
-                except Exception:
-                    pass
-
-            threading.Thread(target=_save_snapshot, daemon=True).start()
 
             import asyncio
             from .admin import log_audit
@@ -301,54 +276,42 @@ class SearchResult(BaseModel):
 async def search(
     q: str, k: int = 3, request: Request = None, user: User = Depends(get_current_user), _gate: None = requires_feature("kb")
 ):
-    """Search knowledge base for similar content."""
+    """Search knowledge base for similar content using pgvector."""
     org_id = require_org_context(request)
 
-    # Generate query embedding
     query_vector = (await embed_texts_async([q]))[0]
 
-    # Search this org's FAISS index only
-    scores, faiss_ids = search_org_vectors(org_id, query_vector, k=k)
-
-    # Map FAISS IDs back to chunks and documents
     with get_db_connection() as conn:
         results = []
         with conn.cursor() as cur:
-            for score, faiss_id in zip(scores, faiss_ids):
-                # Find chunk by FAISS ID in this organization
-                cur.execute(
-                    """
-                    SELECT c.id as chunk_id, c.doc_id, c.text, d.id as document_id
-                    FROM app.chunks c
-                    JOIN app.documents d ON c.doc_id = d.id
-                    WHERE c.faiss_id = %s AND c.organization_id = %s
+            cur.execute(
+                """
+                SELECT c.id as chunk_id, c.doc_id, c.text, d.id as document_id,
+                       1.0 - (c.embedding_vec <=> %s::vector) as score
+                FROM app.chunks c
+                JOIN app.documents d ON c.doc_id = d.id
+                WHERE c.organization_id = %s
+                  AND c.embedding_vec IS NOT NULL
+                ORDER BY c.embedding_vec <=> %s::vector
+                LIMIT %s
                 """,
-                    (faiss_id, org_id),
+                (str(query_vector), org_id, str(query_vector), k),
+            )
+
+            for row in cur.fetchall():
+                preview = (
+                    row["text"][:200] + "..."
+                    if len(row["text"]) > 200
+                    else row["text"]
                 )
-
-                chunk_record = cur.fetchone()
-
-                if chunk_record:
-                    # Truncate text for preview
-                    preview = (
-                        chunk_record["text"][:200] + "..."
-                        if len(chunk_record["text"]) > 200
-                        else chunk_record["text"]
+                results.append(
+                    SearchResult(
+                        faiss_id=row.get("faiss_id") or 0,
+                        score=float(row["score"]),
+                        document_id=str(row["document_id"]),
+                        chunk_id=str(row["chunk_id"]),
+                        text_preview=preview,
                     )
-
-                    results.append(
-                        SearchResult(
-                            faiss_id=int(faiss_id),
-                            score=float(score),
-                            document_id=str(chunk_record["document_id"]),
-                            chunk_id=str(chunk_record["chunk_id"]),
-                            text_preview=preview,
-                        )
-                    )
-                else:
-                    # Handle case where FAISS ID doesn't map to a chunk
-                    results.append(
-                        SearchResult(faiss_id=int(faiss_id), score=float(score))
-                    )
+                )
 
         return results

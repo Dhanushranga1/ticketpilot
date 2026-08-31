@@ -401,38 +401,8 @@ async def lifespan(_app: FastAPI):
             "ENVIRONMENT=development but WEB_ORIGIN is a remote URL — check config!"
         )
 
-    # Rebuild per-org FAISS indexes on cold start (Render free-tier spin-up / redeploy).
-    # Strategy: discover every org that has stored embeddings, try snapshot first,
-    # fall back to full rebuild from individual vectors.
-    _check_faiss_indices()
-    try:
-        from .db import get_connection
-        from .store import load_org_snapshot, rebuild_org_from_db
-
-        conn = await get_connection()
-        try:
-            org_rows = await conn.fetch(
-                "SELECT DISTINCT organization_id FROM app.chunks WHERE embedding IS NOT NULL"
-            )
-        finally:
-            await conn.close()
-
-        org_ids = [str(r["organization_id"]) for r in org_rows if r["organization_id"]]
-        if org_ids:
-            logger.info(
-                "[startup] Rebuilding FAISS for %d org(s): %s", len(org_ids), org_ids
-            )
-            rebuild_tasks = [
-                _rebuild_one_org(org_id, load_org_snapshot, rebuild_org_from_db)
-                for org_id in org_ids
-            ]
-            await asyncio.gather(*rebuild_tasks)
-        else:
-            logger.info(
-                "[startup] No stored embeddings in DB yet — FAISS indexes will be built on first ingest"
-            )
-    except Exception as exc:
-        logger.error("[startup] Per-org FAISS rebuild failed: %s", exc)
+    # pgvector indices live in the database — no cold-start rebuild needed.
+    # (FAISS on-disk indices were wiped on every deploy; pgvector persists with the table.)
 
     task = asyncio.create_task(_overdue_task())
     keepalive = asyncio.create_task(_pool_keepalive())
@@ -528,20 +498,18 @@ app.include_router(entitlements_router)
 
 @app.get("/api/health")
 async def health():
-    """Health check with FAISS, DB pool, and background task status."""
+    """Health check with DB pool and background task status."""
     import time as _time
 
     from .db import _pool as _asyncpg_pool
-    from .store import _cache as _faiss_cache
 
-    faiss_org_count = len(_faiss_cache) if _faiss_cache is not None else 0
     pool_ok = _asyncpg_pool is not None and not _asyncpg_pool._closed
 
     return {
         "ok": True,
         "api": "ticketpilot",
         "version": API_VERSION,
-        "faiss_orgs_cached": faiss_org_count,
+        "vector_store": "pgvector",
         "db_pool_connected": pool_ok,
         "timestamp": _time.time(),
     }
