@@ -37,7 +37,6 @@ from .schemas import (
     TicketSummary,
     TicketWithMessages,
 )
-)
 
 router = APIRouter(prefix="/api", tags=["tickets"])
 

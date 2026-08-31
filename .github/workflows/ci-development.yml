@@ -141,9 +141,9 @@ jobs:
         run: pytest --cov=app --cov-report=xml --cov-report=html -v
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-          JWT_SECRET: test_jwt_secret_for_ci
+          SUPABASE_JWT_SECRET: ${{ secrets.SUPABASE_JWT_SECRET }}
           DATABASE_URL: postgresql://test_user:test_password@localhost:5432/test_db
 
       - name: 📊 Upload Coverage Reports
@@ -276,9 +276,9 @@ jobs:
         run: uvicorn app.main:app --host 0.0.0.0 --port 8000 &
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-          JWT_SECRET: test_jwt_secret_for_ci
+          SUPABASE_JWT_SECRET: ${{ secrets.SUPABASE_JWT_SECRET }}
 
       - name: 🚀 Start Frontend
         working-directory: ./frontend
@@ -293,7 +293,7 @@ jobs:
           npx wait-on http://localhost:3000
 
       - name: 🧪 Run Integration Tests
-        run: python rag_validation_suite.py
+        run: python scripts/rag_validation_suite.py
         env:
           TEST_BASE_URL: http://localhost:8000
           TEST_FRONTEND_URL: http://localhost:3000

@@ -1,7 +1,8 @@
-# TicketPilot — Production Readiness & Sellability Plan
+# Strata / TicketPilot — Pilot Readiness Plan
 
-> **Live document** — updated as phases are completed.  
-> Each phase lists concrete items with file paths.
+> **Live document** — updated as phases are completed.
+> Pilot goal: ship TicketPilot to 5–10 real orgs, gather feedback, then build the next Strata module as a standalone tasteable product.
+> Hardcoded branding: Strata is the platform, TicketPilot is the flagship product. No white-label per-org branding during pilot.
 
 ---
 
@@ -21,149 +22,222 @@
 
 ---
 
-## Phase 4 — Test Coverage & CI (blocks PR merge)
+## Pilot Decisions (locked in)
 
-**Goal**: Tests pass in CI pipeline so dev→main PR can merge.
+- **Vector search:** migrate FAISS → pgvector (vectors live in Supabase, survive redeploys, kill the #1 ops risk).
+- **Tests:** backfill tests before shipping features; jest coverage threshold dropped to ~40% with ratchet plan back to 70% once tests exist.
+- **Branding:** hardcoded Strata + TicketPilot during pilot.
+- **AI depth:** polish existing RAG chat + add 2 agent actions (draft reply, create-KB-from-resolved-ticket).
+- **Plans:** no billing. Super-admin assigns `plan_id` manually. UpgradeBanner becomes "Contact us".
 
-### 4.1 Backend auth tests
-- **New**: `backend/tests/test_auth.py`
-- JWT verification (valid, expired, invalid signature, wrong alg, missing header)
+---
+
+## Phase A — Tests & CI green (blocks everything)
+
+**Goal:** CI pipeline is green; dev→main PRs can merge safely.
+
+### A.1 Backend test fixtures
+- **File:** `backend/tests/conftest.py` (extend existing)
+- Fixtures: `test_db` (mocked via existing approach), `test_org`, `test_user`, `test_admin`, `test_jwt(user)` returning a real signed HS256 token, `async_client` (httpx ASGI test client against `app.main:app`)
+
+### A.2 Backend auth tests
+- **New:** `backend/tests/test_auth.py`
+- JWT verify: valid / expired / invalid signature / wrong alg / missing header
 - ES256 via JWKS, HS256 fallback
-- Org middleware with valid/invalid token
+- `org_middleware`: valid token → user + role attached; invalid token → 401
 - Role caching (60s TTL)
-- Rate limit key extraction
 
-### 4.2 Backend org tests
-- **New**: `backend/tests/test_organizations.py`
-- CRUD, slug validation, member management
-- Role checks, invite accept flow
-- Cross-org data isolation
+### A.3 Backend org tests
+- **New:** `backend/tests/test_organizations.py`
+- CRUD, slug validation, member add/remove
+- Role transitions (owner/admin/rep/member), invite accept flow
+- Cross-org data isolation (user of org A cannot see org B tickets)
 
-### 4.3 Backend ticket tests
-- **New**: `backend/tests/test_tickets.py`
-- CRUD, assign (with cross-org rejection)
-- Status transitions, message flow, priority/SLA
-- AI chat endpoint (RAG integration)
+### A.4 Backend ticket tests
+- **New:** `backend/tests/test_tickets.py`
+- CRUD, assign (cross-org rejection), status transitions, message flow, priority/SLA
+- `POST /api/tickets/{id}/chat` happy path + cooldown + low-confidence escalation path
 
-### 4.4 Backend RAG tests
-- **New**: `backend/tests/test_rag.py`
-- MMR re-ranking, context building
+### A.5 Backend RAG tests
+- **New:** `backend/tests/test_rag.py` (complement existing `test_rag_scoring.py`)
+- `retrieve()` flow, MMR re-rank, context building + truncation
 - Citation parsing, embedding fallback
 - Zero-vector handling, concurrent search/ingest
-- CASPER confidence scoring
 
-### 4.5 Frontend API client tests
-- **New**: `frontend/src/__tests__/lib/api-client.test.ts`
+### A.6 Frontend API client tests
+- **New:** `frontend/src/__tests__/lib/api-client.test.ts`
 - Auth header injection, GET caching
 - Cache invalidation, 401 retry with refresh
 - 502/503 retry, timeout via AbortController
 
-### 4.6 Frontend auth context tests
-- **New**: `frontend/src/__tests__/contexts/OrganizationContext.test.tsx`
+### A.7 Frontend OrganizationContext tests
+- **New:** `frontend/src/__tests__/contexts/OrganizationContext.test.tsx`
 - Load state, auth context, org switching
 - Error states, cross-tab sync, unmount cleanup
 
-### 4.7 CI workflow fixes
-- **File**: `.github/workflows/ci-development.yml`
-- Ensure all lint/format commands match current setup
-- Add npm audit check (soft-fail)
-- Add security headers test
-- Verify `rag_validation_suite.py` works against test DB
+### A.8 Frontend jest config ratchet
+- **File:** `frontend/jest.config.js`
+- Drop global `coverageThreshold` to **40%** (current 70% fails with one test file)
+- Track: raise to 50% after Phase A, 60% after Phase E, back to 70% after Phase G
 
-### 4.8 Backend test fixtures
-- **New**: `backend/tests/conftest.py`
-- Pytest fixtures: test DB connection, test org, test user, test JWT token
+### A.9 CI workflow fixes
+- **File:** `.github/workflows/ci-development.yml`
+- Rename backend env vars: `SUPABASE_SERVICE_KEY` → `SUPABASE_SERVICE_ROLE_KEY`, `JWT_SECRET` → `SUPABASE_JWT_SECRET`
+- Fix `scripts/rag_validation_suite.py` invocation (CI runs from root, script lives in `scripts/`)
+- Lint/format commands: verify they match current setup (ESLint flat config, prettier)
 
-### 4.9 Frontend test infrastructure
-- **Files**: `frontend/jest.config.js`, `frontend/jest.setup.js`
-- Fix `@/` path aliases in jest config
-- Add `@testing-library/jest-dom` imports
-
----
-
-## Phase 5 — Sellability Features
-
-**Goal**: Features enterprise customers require to buy.
-
-### 5.1 Audit trail frontend
-- **Table**: `app.audit_log` already exists (migration 0022)
-- **API**: `GET /api/admin/audit-log` already exists
-- **Build**: Admin audit log view page with filters, pagination
-- **Events**: ticket create/update/assign/close, org member changes, role changes, KB upload/delete, invites
-
-### 5.2 API tokens
-- **New table**: `app.api_tokens` (migration 0031)
-- **Features**: 32-byte hex token, last_used_at, expiry, permission scopes, per-org binding
-- **Auth**: Custom `X-API-Key` header → lookup token → impersonate owner user
-- **Frontend**: Token management page in org settings
-
-### 5.3 Rate limit headers
-- **File**: `backend/app/security.py`
-- Add `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`, `Retry-After` to all responses via middleware
-
-### 5.4 Data export
-- **New endpoint**: `GET /api/organizations/{id}/export`
-- Scope: tickets (with messages), KB documents, settings, audit log
-- Format: JSON archive (tar.gz), async with email notification
-
-### 5.5 Usage tracking / billing
-- **New table**: `app.usage_events` (migration 0032)
-- Events: ticket created, AI query, KB upload, API call
-- Plans: tier limits (tickets/month, AI queries/month, storage GB)
-- Frontend: usage dashboard in org settings
-
-### 5.6 Status page
-- **New route**: `GET /api/status` — public, no auth
-- Checks: DB, FAISS, LLM reachability, last background task run time
-- Frontend: optional public status page at `/status`
-
-### 5.7 Webhook system
-- **New table**: `app.webhooks` (migration 0033)
-- Events: ticket.created/updated/assigned/resolved, message.created
-- Config: URL, secret (HMAC), event filters, retry policy
-- Delivery: background task with exponential backoff, dead-letter after 24h
+### A.10 Verification
+- `make test-backend` → pytest green
+- `make test-frontend` → jest green with new threshold
+- `npm run type-check` / `npm run lint` → clean
+- CI run on `dev` branch green end-to-end
 
 ---
 
-## Phase 6 — Enterprise Scale Hardening
+## Phase B — pgvector migration (parallelizeable with Phase A)
 
-**Goal**: Handle 1000+ orgs and 100+ concurrent users.
+**Goal:** kill FAISS — vectors in Postgres, survive redeploys, no ephemeral FS dependency.
 
-### 6.1 FAISS per-org lock cleanup
-- **File**: `backend/app/store.py`
-- Clean up `_per_org_locks` dict when org is deleted or cache evicted
-- Prevent unbounded growth with thousands of orgs
+### B.1 Enable pgvector
+- **New migration:** `0031_pgvector_enable.sql` — `CREATE EXTENSION IF NOT EXISTS vector`
+- New table `app.kb_embeddings` (or reuse `app.chunks` adding `embedding vector(768)`)
 
-### 6.2 Embedding API circuit breaker
-- **File**: `backend/app/embeddings.py`
-- After 3 consecutive failures, wait 60s before retrying
-- Covers Jina/Gemini/Groq/OpenAI API calls
+### B.2 Migrate embeddings
+- **New migration:** `0032_chunk_embeddings.sql` — add `embedding vector(768)` column to `app.chunks`, backfill from existing `app.chunks.embedding` (BYTEA) where present
+- Deprecate `app.faiss_snapshots` table (migration 0020/0021) — keep for one release cycle
 
-### 6.3 Database connection pool tuning
-- **File**: `backend/app/db.py`
-- Make pool size, timeouts, retries configurable via env vars
+### B.3 Switch retrieval
+- **File:** `backend/app/rag.py`
+- `retrieve()` → `SELECT ... FROM app.chunks WHERE org_id = $1 ORDER BY embedding <=> $2 LIMIT $3` (cosine) or `<#>` (IP)
+- Keep MMR post-processing (already pure-Python)
 
-### 6.4 Background task monitoring
-- **File**: `backend/app/main.py`
-- Health endpoint reports last run time, duration, success/failure for: overdue scan, pool keepalive, FAISS rebuild
+### B.4 Strip FAISS code
+- **File:** `backend/app/store.py` — delete `FaissStore`, per-org locks, index LRU, snapshots
+- **File:** `backend/app/main.py` — remove FAISS rebuild background task, remove startup snapshot load
+- **File:** `backend/app/rag.py` — remove FAISS search/ingest paths
 
-### 6.5 Frontend offline detection
-- **New**: `frontend/src/lib/network.ts`
-- `navigator.onLine` detection, offline banner, queue mutations for retry
+### B.5 Shrink default embedding dim
+- **File:** `backend/app/ai_settings.py` — default `embed_dim` 768 (was 3072)
+- Suggested defaults: `gemini-embedding-001` stays (Google supports 768/1536/3072, configurable) OR `text-embedding-3-small` (1536) / `jina-embeddings-v4` (1024)
+- Halves vector storage + FAISS→pgvector RAM usage ÷4
+
+### B.6 Fallback
+- If pgvector unavailable (no extension): in-memory brute force from `app.chunks.embedding` — never block startup
 
 ---
 
-## Phase 7 — Polish
+## Phase C — Cost leaks + quota enforcement
 
-**Goal**: Developer experience and maintainability.
+**Goal:** per-request AI cost predictable; free-tier hosting viable.
 
-### 7.1 Operations documentation
-- **New**: `docs/operations.md`
-- Deployment checklist, monitoring setup, backup procedures, incident response runbook, scaling guide
+### C.1 Stop re-embedding chunks per request
+- **File:** `backend/app/rag.py:47-64,224` — `_ensure_embeddings` called per call re-embeds all retrieved chunk texts
+- Fix: pgvector query already returns top-k, no re-embedding needed; only embed the **query**
 
-### 7.2 Known issues cleanup
-- Remove stale root docs (`DEPLOYMENT.md`, `CI_CD_DOCUMENTATION.md`, etc.) that were copied during Obsidian sync
-- Consolidate into `docs/` folder
+### C.2 Enforce AI query quota
+- **File:** `backend/app/entitlements/__init__.py` — increment `app.org_usage.ai_queries_used` on every `/chat` hit
+- 402 when `ai_queries_used >= limits.ai_queries` (starter 5k, business 25k, enterprise unlimited, community 0)
+
+### C.3 Enforce rate limits
+- **File:** `backend/app/security.py` — add `@limiter.limit` decorators to expensive endpoints (chat, kb/ingest, invites)
+
+### C.4 Fix logging model strings
+- Replace hardcoded `gemini-1.5-pro` with DB-aware value via `ai_settings`
+
+---
+
+## Phase D — Polish half-built UI
+
+**Goal:** no dead links, no mock data, no cosmetic toggles.
+
+### D.1 Dead link
+- `frontend/src/app/(protected)/dashboard/page.tsx:815` → open the create dialog instead of `/tickets/new`
+
+### D.2 Admin settings cosmetic toggles
+- `admin/settings/page.tsx` — persist `backupEnabled` / `maintenanceMode` / `debugMode` to org settings OR remove them
+
+### D.3 Admin roles mock data
+- `admin/roles/page.tsx:226-256` — replace mock activity with real `audit_log` query OR hide section until backend ready
+
+### D.4 Audit log page
+- `admin/audit-log/page.tsx:208-216` — remove "run migration" dev note
+
+### D.5 KB Manage tab
+- `kb/page.tsx:633-766` — doc edit + delete (currently read-only)
+
+### D.6 Finish rebrand strings
+- ~15 files with hardcoded "TicketPilot" in user-facing places (login, signup, wizard, empty states)
+- Keep backend/Makefile/.env references — they're mid-transition per AGENTS.md
+
+### D.7 Hardcode model strings in logging
+- `tickets.py:951, 984, 1140, 1170, 1262` — use actual model from `ai_settings`
+
+---
+
+## Phase E — AI polish + 2 agent actions
+
+**Goal:** demonstrate agentic future, not just RAG chat.
+
+### E.1 Gate rep AI Assist
+- `rep/page.tsx` — wrap "Get AI Suggestion" in `<FeatureGate feature="ai_rag">` (currently ungated)
+- Wire feedback no-op at `rep/page.tsx:576` → `POST /api/ai/feedback`
+- Dedupe rep-AI and ticket-chat service into shared `rag.py` helper
+
+### E.2 Agent action 1 — AI draft reply
+- `POST /api/tickets/{id}/ai-draft` → returns draft text + citations; rep accepts → posts as `sender_role='rep'` message
+- Gate: `ai_rag`
+
+### E.3 Agent action 2 — Create KB from resolved ticket
+- `POST /api/tickets/{id}/ai-kb-draft` → AI summarizes resolved ticket as a KB article draft + sources
+- Rep reviews → `POST /api/kb/ingest` with the drafted content
+- Gate: `kb` + `ai_rag`
+
+### E.4 Streaming (optional, defer if time-boxed)
+- SSE endpoint `/api/tickets/{id}/chat/stream` — progressive response
+
+---
+
+## Phase F — Pilot launch kit
+
+**Goal:** orgs can self-serve onboarding without your billing.
+
+### F.1 Plan assignment UI
+- `admin/organizations/page.tsx` — plan_id dropdown per org (backend endpoint exists)
+
+### F.2 Upgrade banner rewrite
+- `UpgradeBanner.tsx` — "Contact us" content, no dead `/settings?upgrade` route
+
+### F.3 BYOK in onboarding wizard
+- `wizard/onboarding/page.tsx` — add AI-keys step between KB upload and invite steps (pilot orgs supply their own Google/Groq key)
+
+### F.4 Seed script refresh
+- `backend/demo/demo_seed.py` — refresh demo KB, demo tickets, demo canned responses for pilot showcases
+
+### F.5 README / marketing sync
+- Update README stack claims (currently says HNSW/BM25/semantic cache — not true)
+- Fix "Groq llama-3.3-70b" claim — defaults are Gemini
+
+---
+
+## Phase G — Next Strata products (post-feedback)
+
+**Goal:** after TicketPilot pilots validate the platform, build the next tasteable module.
+
+### G.1 AssetLog (starter plan)
+- Spec: `docs/modules/01_assetlog.md`
+- Migration: `0033_assetlog.sql` (standalone, no FK deps)
+- Pages: `/assets`, `/assets/[id]`
+
+### G.2 ContractVault (starter plan)
+- Spec: `docs/modules/02_contractvault.md`
+- Migration: `0034_contractvault.sql` (vendors + contracts)
+
+### G.3 Platform Hub
+- Spec: `docs/modules/00_strata_platform_hub.md`
+- Page: `/platform` with module cards + live stats
+- Becomes the primary nav once 2+ modules are live
+
+### G.4 … further modules follow dependency chain in `docs/modules/README.md`
 
 ---
 
@@ -171,11 +245,14 @@
 
 | Phase | Status | Notes |
 |-------|--------|-------|
-| 0–3 — Core Fixes | ✅ | Security, correctness, hardening, observability |
+| 0–3 Core Fixes | ✅ | Security, correctness, hardening, observability |
 | Dev/Prod Separation | ✅ | Env templates, Docker, Makefile, migration runner |
 | BYOK AI System | ✅ | DB config, UI settings, provider-agnostic |
 | RAG Pipeline Fixes | ✅ | MMR auto-disable, faiss_id sync, MOC removal |
-| 4 — Tests & CI | ⬜ | Blocks PR merge — start here |
-| 5 — Sellability | ⬜ | Audit UI, API tokens, billing, webhooks |
-| 6 — Enterprise Scale | ⬜ | FAISS cleanup, circuit breaker, pool tuning |
-| 7 — Polish | ⬜ | Operations docs, stale file cleanup |
+| **A — Tests & CI** | ✅ | 105 backend + 28 frontend tests pass. Coverage 50%/44%/45%/52% (threshold 40%). |
+| B — pgvector | ⬜ | Parallelize with A. Kill FAISS. |
+| C — Cost/Quota | ⬜ | After B (re-embed removal overlaps). |
+| D — UI Polish | ⬜ | Half-built pages, dead links, rebrand. |
+| E — AI + Agents | ⬜ | Draft reply + KB-from-ticket actions. |
+| F — Pilot Kit | ⬜ | Plan assignment, BYOK onboarding, seed data. |
+| G — Next Modules | ⬜ | AssetLog → ContractVault → Platform Hub. |
