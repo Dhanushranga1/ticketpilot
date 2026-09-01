@@ -253,6 +253,6 @@
 | B — pgvector | ✅ | Migration 0031, rag.py/kb.py/tickets.py switched, FAISS stripped from startup, in-memory fallback. |
 | C — Cost/Quota | ✅ | Re-embed eliminated (pgvector), AI quota 402 enforcement, slowapi rate limits on chat/create/ingest, DB-aware model logging. |
 | D — UI Polish | ✅ | Dead link fixed (?new=1), cosmetic toggles removed, real audit data in roles page, audit-log note cleaned, KB doc delete, ingest NameError fixed. |
-| E — AI + Agents | ⬜ | Draft reply + KB-from-ticket actions. |
+| E — AI + Agents | ✅ | Rep AI gated + feedback wired, Send-to-Customer agent action, KB-draft-from-ticket agent action. |
 | F — Pilot Kit | ⬜ | Plan assignment, BYOK onboarding, seed data. |
 | G — Next Modules | ⬜ | AssetLog → ContractVault → Platform Hub. |

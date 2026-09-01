@@ -836,6 +836,63 @@ CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.55"))
 CONFIDENCE_MIN_CHUNKS = int(os.getenv("CONFIDENCE_MIN_CHUNKS", "2"))
 
 
+@router.post("/tickets/{ticket_id}/ai-kb-draft")
+def ai_kb_draft(
+    ticket_id: str,
+    request: Request,
+    user: User = Depends(get_current_user),
+    _gate: None = requires_feature("ai_rag"),
+):
+    """Agent action: draft a KB article from a resolved ticket's conversation."""
+    org_id = require_org_context(request)
+    if not is_rep_in_org(user, request):
+        raise HTTPException(status_code=403, detail="Rep access required")
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT t.id, t.title, t.status, t.description
+            FROM app.tickets t
+            WHERE t.id = %s AND t.organization_id = %s
+        """,
+            (ticket_id, org_id),
+        )
+        ticket_row = cursor.fetchone()
+        if not ticket_row:
+            raise HTTPException(status_code=404, detail="Ticket not found")
+
+        cursor.execute(
+            """
+            SELECT sender_role, body, created_at
+            FROM app.messages
+            WHERE ticket_id = %s AND organization_id = %s AND is_internal = false
+            ORDER BY created_at ASC
+            LIMIT 50
+        """,
+            (ticket_id, org_id),
+        )
+        message_rows = cursor.fetchall()
+
+    conversation_parts = [f"Ticket: {ticket_row['title']}"]
+    if ticket_row.get("description"):
+        conversation_parts.append(f"Initial description: {ticket_row['description']}")
+    for m in message_rows:
+        role = m["sender_role"]
+        conversation_parts.append(f"{role.upper()}: {m['body']}")
+    conversation = "\n\n".join(conversation_parts)
+
+    from .ai import generate_kb_draft
+
+    try:
+        title, content = generate_kb_draft(conversation)
+    except Exception as e:
+        logger.error("KB draft generation failed for ticket %s: %s", ticket_id, e)
+        raise HTTPException(status_code=502, detail="AI generation failed")
+
+    return {"ticket_id": ticket_id, "title": title, "content": content}
+
+
 def fetch_chunks_by_faiss_ids(faiss_ids: List[int], org_id: str) -> List[dict]:
     """Fetch chunk details from database by FAISS IDs."""
     if not faiss_ids:
