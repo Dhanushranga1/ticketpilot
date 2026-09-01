@@ -58,8 +58,12 @@ Integration test (both servers running): `python scripts/rag_validation_suite.py
 - Connection uses **transaction pooler** port **6543**, not 5432.
 
 ## Auth
-- JWT HS256 via Supabase (ES256 via JWKS also supported).
+- Supabase Auth. Backend verifies JWT — ES256 via JWKS (modern) + HS256 legacy fallback.
 - **CRITICAL**: `SUPABASE_JWT_SECRET` = raw signing secret from Settings→API→JWT Settings, NOT the service_role JWT token. Wrong value → `401 Invalid token` on all requests.
+- New Supabase projects issue `sb_secret_*`/`sb_publishable_*` API keys (not JWT-shaped). `auth.py` builds the SDK client with a placeholder JWT + real key in Authorization header. **Gotcha**: sb_secret works for REST but NOT Auth Admin API (401) — profile-metadata endpoints degrade gracefully; legacy JWT `service_role` key needed for Auth Admin (invite emails).
+- Frontend uses `@supabase/ssr`: cookie sessions (`src/lib/supabase/server.ts` + `client.ts`), route protection + session refresh in `src/middleware.ts` (redirects to `/login?redirect=<path>`). `src/lib/supabaseClient.ts` re-exports the browser client for legacy compat.
+- `/invite/[token]` intentionally NOT protected by middleware — page handles unauthenticated visitors itself.
+- `/auth/confirm/route.ts` = SSR magic-link verification endpoint.
 
 ## Architecture quirks
 - Two DB pools: asyncpg `db.py` (async) + psycopg3 `db_sync.py` (sync)
