@@ -21,6 +21,7 @@ from .db_sync import get_db_connection
 from .embeddings import embed_texts_async
 from .entitlements import requires_feature
 from .org_middleware import require_org_context
+from .security import limiter
 from .utils import normalize_text, sha256, sniff_and_read
 
 _log = logging.getLogger(__name__)
@@ -44,6 +45,7 @@ class IngestResponse(BaseModel):
 
 
 @router.post("/ingest", response_model=IngestResponse)
+@limiter.limit("10/minute")
 async def ingest(
     request: Request,
     user: User = Depends(get_current_user),

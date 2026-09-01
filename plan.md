@@ -251,7 +251,7 @@
 | RAG Pipeline Fixes | ✅ | MMR auto-disable, faiss_id sync, MOC removal |
 | **A — Tests & CI** | ✅ | 105 backend + 28 frontend tests pass. Coverage 50%/44%/45%/52% (threshold 40%). |
 | B — pgvector | ✅ | Migration 0031, rag.py/kb.py/tickets.py switched, FAISS stripped from startup, in-memory fallback. |
-| C — Cost/Quota | ⬜ | After B (re-embed removal overlaps). |
+| C — Cost/Quota | ✅ | Re-embed eliminated (pgvector), AI quota 402 enforcement, slowapi rate limits on chat/create/ingest, DB-aware model logging. |
 | D — UI Polish | ⬜ | Half-built pages, dead links, rebrand. |
 | E — AI + Agents | ⬜ | Draft reply + KB-from-ticket actions. |
 | F — Pilot Kit | ⬜ | Plan assignment, BYOK onboarding, seed data. |

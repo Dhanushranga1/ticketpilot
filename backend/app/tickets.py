@@ -17,10 +17,12 @@ from .email import (
     send_ticket_created_for_customer_email,
     send_ticket_resolved_email,
 )
+from .ai_settings import gen_model
 from .observability import get_observer, log_rag_metrics
 from .org_middleware import require_org_context
 from .entitlements import requires_feature
 from .rag_scoring import casper_route, profile_ticket
+from .security import limiter
 from .schemas import (
     BulkTicketRequest,
     ChatRequest,
@@ -100,6 +102,7 @@ def is_rep_in_org(user: User, request: Request) -> bool:
 @router.post(
     "/tickets", response_model=TicketDetail, status_code=status.HTTP_201_CREATED
 )
+@limiter.limit("20/minute")
 def create_ticket(
     payload: TicketCreate, request: Request, user: User = Depends(get_current_user)
 ):
@@ -854,6 +857,7 @@ def fetch_chunks_by_faiss_ids(faiss_ids: List[int], org_id: str) -> List[dict]:
 
 
 @router.post("/tickets/{ticket_id}/chat", response_model=ChatResponse)
+@limiter.limit("10/minute")
 def chat_with_ai(
     ticket_id: str,
     payload: ChatRequest,
@@ -863,6 +867,11 @@ def chat_with_ai(
 ):
     """Generate AI response for a ticket using enhanced RAG with comprehensive observability."""
     org_id = require_org_context(request)
+
+    # Enforce AI query quota (raises 402 if exhausted)
+    from .entitlements import increment_ai_query
+
+    increment_ai_query(org_id)
 
     # Start observability tracking
     observer = get_observer()
@@ -946,7 +955,7 @@ def chat_with_ai(
                 response=no_context_response,
                 confidence=0.0,
                 citations_count=0,
-                model=os.getenv("GENAI_MODEL", "gemini-1.5-pro"),
+                model=gen_model(),
                 latency_ms=0,
                 escalation_triggered=True,
             )
@@ -979,7 +988,7 @@ def chat_with_ai(
                         {
                             "citations": [],
                             "confidence": 0.0,
-                            "model": os.getenv("GENAI_MODEL", "gemini-1.5-pro"),
+                            "model": gen_model(),
                             "suggest_escalation": True,
                             "escalation_info": escalation_info,
                             "retrieval_metrics": {"no_chunks": 1.0},
@@ -1135,7 +1144,7 @@ def chat_with_ai(
         response=ai_response,
         confidence=confidence,
         citations_count=citations_count,
-        model=os.getenv("GENAI_MODEL", "gemini-1.5-pro"),
+        model=gen_model(),
         latency_ms=generation_latency,
         escalation_triggered=should_escalate_flag,
     )
@@ -1164,7 +1173,7 @@ def chat_with_ai(
             "citations": [c.dict() for c in citations],
             "confidence": confidence,
             "confidence_breakdown": confidence_components,
-            "model": os.getenv("GENAI_MODEL", "gemini-1.5-pro"),
+            "model": gen_model(),
             "suggest_escalation": should_escalate_flag,
             "escalation_details": escalation_details,
             "retrieval_metrics": retrieval_metrics,
@@ -1257,7 +1266,7 @@ def chat_with_ai(
                 (
                     ticket_id,
                     user.id,
-                    os.getenv("GENAI_MODEL", "gemini-1.5-pro"),
+                    gen_model(),
                     prompt_hash,
                     len(chunks),
                     confidence,
