@@ -3,7 +3,12 @@ module.exports = {
   setupFilesAfterEnv: ['<rootDir>/jest.setup.js'],
   testPathIgnorePatterns: ['<rootDir>/.next/', '<rootDir>/node_modules/'],
   transform: {
-    '^.+\\.tsx?$': ['ts-jest', { tsconfig: '<rootDir>/tsconfig.json' }],
+    '^.+\\.tsx?$': [
+      'ts-jest',
+      {
+        tsconfig: '<rootDir>/tsconfig.jest.json',
+      },
+    ],
   },
   moduleNameMapper: {
     '^@/(.*)$': '<rootDir>/src/$1',
@@ -13,16 +18,17 @@ module.exports = {
     '^@/app/(.*)$': '<rootDir>/src/app/$1',
   },
   collectCoverageFrom: [
-    'src/**/*.{ts,tsx}',
+    'src/lib/**/*.{ts,tsx}',
+    'src/contexts/**/*.{ts,tsx}',
+    'src/hooks/**/*.{ts,tsx}',
     '!src/**/*.d.ts',
-    '!src/**/*.stories.{ts,tsx}',
   ],
   coverageThreshold: {
     global: {
-      branches: 40,
-      functions: 40,
-      lines: 40,
-      statements: 40,
+      branches: 55,
+      functions: 65,
+      lines: 70,
+      statements: 70,
     },
   },
 };

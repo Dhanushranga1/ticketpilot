@@ -61,6 +61,10 @@ async def _circuit_failure():
 
 
 def _ssl_mode(database_url: str) -> str:
+    # Supabase requires SSL. Local dev (docker postgres) needs disable/prefer.
+    explicit = os.getenv("DB_SSL_MODE", "").strip().lower()
+    if explicit in ("require", "prefer", "disable", "allow", "verify-full"):
+        return explicit
     return "require"
 
 

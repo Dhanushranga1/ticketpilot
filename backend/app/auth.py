@@ -2,6 +2,7 @@ import base64
 import json
 import logging
 import os
+import re
 import time
 from typing import List, Optional
 
@@ -36,8 +37,31 @@ if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
         "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required in .env"
     )
 
+
+def _is_jwt_key(key: str) -> bool:
+    """Supabase SDK only accepts JWT-shaped keys (legacy service_role format)."""
+    return bool(
+        re.match(r"^[A-Za-z0-9-_=]+\.[A-Za-z0-9-_=]+\.?[A-Za-z0-9-_.+/=]*$", key)
+    )
+
+
+def _build_supabase_client(url: str, key: str) -> Client:
+    if _is_jwt_key(key):
+        return create_client(url, key)
+    # New sb_secret_* API keys: not JWT-shaped. The SDK client is only used for
+    # non-critical profile metadata lookups — create it with a placeholder JWT
+    # so boot never crashes; real key passed via explicit Authorization header.
+    from supabase import ClientOptions
+
+    return create_client(
+        url,
+        "eyJhbGciOiJIUzI1NiJ9.e30.placeholder",
+        options=ClientOptions(headers={"Authorization": f"Bearer {key}"}),
+    )
+
+
 # Create Supabase client
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+supabase: Client = _build_supabase_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
 
 class User(BaseModel):

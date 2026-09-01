@@ -13,7 +13,7 @@
 
 services:
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16  # includes pgvector extension (required by migration 0031+)
     container_name: ticketpilot-pg
     restart: unless-stopped
     ports:

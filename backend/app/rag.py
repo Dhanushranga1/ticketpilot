@@ -1,6 +1,6 @@
 """
 RAG retrieval module.
-Handles embedding queries, FAISS search, context building, and advanced confidence scoring.
+Handles embedding queries, pgvector search, context building, and advanced confidence scoring.
 Enhanced with MMR re-ranking, semantic coherence analysis, and CASPER adaptive scoring.
 """
 
@@ -167,7 +167,7 @@ _INTENT_MMR_LAMBDA: Dict[str, float] = {
     "comparison": 0.48,  # maximum diversity; one source per entity being compared
 }
 
-# Intent-adaptive FAISS search headroom (multiplier on TOP_K before re-ranking)
+# Intent-adaptive search headroom (multiplier on TOP_K before re-ranking)
 _INTENT_SEARCH_HEADROOM: Dict[str, int] = {
     "factual": 2,  # tight pool — precision over recall
     "procedural": 3,  # moderate — enough steps coverage

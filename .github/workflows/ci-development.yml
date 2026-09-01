@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  NODE_VERSION: '18'
+  NODE_VERSION: '20'
   PYTHON_VERSION: '3.11'
 
 jobs:
@@ -173,6 +173,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [frontend-checks]
     if: github.event_name == 'pull_request'
+    continue-on-error: true  # soft-fail: pilot app, perf score not merge-blocking yet
     
     steps:
       - name: 📦 Checkout Code

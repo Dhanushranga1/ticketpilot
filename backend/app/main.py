@@ -55,43 +55,6 @@ logger.info(
 )
 
 
-def _check_faiss_indices():
-    """
-    Warn if the FAISS data directory is empty.
-
-    FAISS indices live under data/faiss/<org_id>/ and are NOT committed to git.
-    On ephemeral cloud deployments (Render, Railway, etc.) the filesystem is wiped
-    on every deploy, so all indices are lost. When this warning fires, admins must
-    re-upload KB documents to rebuild the indices before the AI assistant returns
-    useful answers.
-    """
-    index_dir = os.getenv("VECTOR_INDEX_DIR", "./data/faiss")
-    if not os.path.isdir(index_dir):
-        logger.warning(
-            "FAISS data directory '%s' does not exist — no KB indices loaded. "
-            "AI responses will have low confidence until documents are re-uploaded. "
-            "On ephemeral deployments KB documents must be re-uploaded after every deploy.",
-            index_dir,
-        )
-        return
-
-    org_dirs = [
-        d for d in os.listdir(index_dir) if os.path.isdir(os.path.join(index_dir, d))
-    ]
-    if not org_dirs:
-        logger.warning(
-            "FAISS data directory '%s' exists but contains no org indices — "
-            "AI responses will have low confidence until documents are re-uploaded.",
-            index_dir,
-        )
-    else:
-        logger.info(
-            "FAISS: found indices for %d organisation(s): %s",
-            len(org_dirs),
-            org_dirs,
-        )
-
-
 _PRIORITY_DEFAULT_HOURS = {1: 168, 2: 72, 3: 48, 4: 24, 5: 12, 6: 6, 7: 7}
 
 
@@ -355,26 +318,6 @@ async def _pool_keepalive():
             logger.debug("[keepalive] pool ping OK")
         except Exception as exc:
             logger.warning("[keepalive] pool ping failed: %s", type(exc).__name__)
-
-
-async def _rebuild_one_org(org_id: str, load_snapshot_fn, rebuild_fn) -> None:
-    """Try snapshot load first; fall back to full per-vector rebuild for one org."""
-    try:
-        count = await load_snapshot_fn(org_id)
-        if count is not None:
-            logger.info(
-                "[startup] org %s loaded from snapshot (%d vectors)", org_id, count
-            )
-            return
-        count = await rebuild_fn(org_id)
-        if count:
-            logger.info(
-                "[startup] org %s rebuilt from embeddings (%d vectors)", org_id, count
-            )
-        else:
-            logger.info("[startup] org %s has no embeddings yet", org_id)
-    except Exception as exc:
-        logger.warning("[startup] org %s rebuild failed: %s", org_id, exc)
 
 
 @asynccontextmanager

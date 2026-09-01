@@ -35,7 +35,6 @@ def ingest_kb():
     from app.utils import normalize_text, sha256
     from app.chunker import make_chunks
     from app.embeddings import embed_texts
-    from app.store import add_org_vectors
 
     print("[KB] Reading", KB_FILE)
     raw_text = KB_FILE.read_text()
@@ -99,20 +98,17 @@ def ingest_kb():
 
     print(f"[KB] Inserted {len(chunk_ids)} chunks")
 
-    # Add to FAISS + update embedding column
-    assigned_faiss_ids = add_org_vectors(ORG_ID, chunk_ids, vectors)
-    print(f"[KB] Added {len(assigned_faiss_ids)} vectors to FAISS")
-
+    # Write embeddings to pgvector column
     with db() as conn:
         cur = conn.cursor()
-        for chunk_id, faiss_id, vec in zip(chunk_ids, assigned_faiss_ids, vectors):
+        for chunk_id, vec in zip(chunk_ids, vectors):
             cur.execute(
-                "UPDATE app.chunks SET faiss_id = %s, embedding = %s WHERE id = %s",
-                (faiss_id, vec, chunk_id)
+                "UPDATE app.chunks SET embedding_vec = %s::vector, embedding = %s::float4[] WHERE id = %s",
+                (str(list(vec)), list(vec), chunk_id),
             )
         conn.commit()
 
-    print(f"[KB] Done — {len(chunk_ids)} chunks in DB, {len(assigned_faiss_ids)} in FAISS")
+    print(f"[KB] Done — {len(chunk_ids)} chunks in DB with pgvector embeddings")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

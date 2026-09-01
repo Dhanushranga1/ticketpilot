@@ -5,29 +5,25 @@
 -- 1. Enable pgvector extension
 CREATE EXTENSION IF NOT EXISTS vector;
 
--- 2. Add vector column (3072-dim to match existing gemini-embedding-001 embeddings)
--- Existing `embedding float4[]` column (migration 0019) stores raw vectors as Postgres arrays.
--- This new column uses pgvector's native `vector` type with distance operators.
+-- 2. Add vector column. 768-dim — matches gemini-embedding-001 default output
+--    and stays under pgvector's 2000-dim HNSW limit.
+--    (Earlier draft used 3072 — invalid for hnsw on Supabase pgvector.)
 ALTER TABLE app.chunks
-    ADD COLUMN IF NOT EXISTS embedding_vec vector(3072);
+    ADD COLUMN IF NOT EXISTS embedding_vec vector(768);
 
--- 3. Backfill from existing float4[] column
--- Converts Postgres array to pgvector vector type.
--- Only updates rows where embedding exists and embedding_vec is null (idempotent).
+-- 3. Backfill from existing float4[] column where dims match
+--    (3072-dim rows from the FAISS era are ignored — re-embed on next ingest)
 UPDATE app.chunks
 SET embedding_vec = embedding::vector
 WHERE embedding IS NOT NULL
-  AND embedding_vec IS NULL;
+  AND embedding_vec IS NULL
+  AND array_length(embedding, 1) = 768;
 
 -- 4. Create HNSW index for fast approximate nearest-neighbor search
--- vector_cosine_ops = cosine distance operator (<=>), which is what we want for normalized embeddings.
--- m=16, ef_construction=64 are pgvector defaults (good balance of speed/recall).
+-- vector_cosine_ops = cosine distance operator (<=>).
 CREATE INDEX IF NOT EXISTS idx_chunks_embedding_vec
     ON app.chunks USING hnsw (embedding_vec vector_cosine_ops)
     WITH (m = 16, ef_construction = 64);
 
 -- 5. Deprecate FAISS snapshot table (keep for one release cycle, then drop)
--- app.faiss_snapshots (migration 0020/0021) stores FAISS binary blobs.
--- With pgvector, snapshots are unnecessary — vectors live in the indexed column.
--- NOT dropping yet to allow rollback if needed.
 COMMENT ON TABLE app.faiss_snapshots IS 'DEPRECATED: pgvector replaces FAISS. Table kept for rollback safety.';
