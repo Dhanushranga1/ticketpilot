@@ -18,6 +18,18 @@ from .schemas import FeedbackRequest, FeedbackResponse
 router = APIRouter(prefix="/api/ai", tags=["ai"])
 
 
+@router.get("/status")
+async def ai_status():
+    """Public AI status — model names + key presence only. No secrets, no auth."""
+    from .ai_settings import embed_api_key, embed_model, gen_api_key, gen_model
+
+    return {
+        "gen_model": gen_model(),
+        "embed_model": embed_model(),
+        "keys_configured": bool(gen_api_key()) and bool(embed_api_key()),
+    }
+
+
 @router.post("/feedback", response_model=FeedbackResponse)
 async def submit_feedback(
     request: Request, body: FeedbackRequest, user: User = Depends(get_current_user)

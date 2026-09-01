@@ -28,10 +28,10 @@ Strata brings ticketing, asset management, contracts, procurement, patch trackin
 
 ## Stack
 
-- **Backend:** FastAPI · psycopg3 · Supabase/PostgreSQL · FAISS · Groq (llama-3.3-70b) · Jina embeddings
+- **Backend:** FastAPI · asyncpg + psycopg3 · Supabase/PostgreSQL · pgvector · provider-agnostic AI (Gemini / Groq / Anthropic / OpenAI-compat generation; Gemini / OpenAI / Jina embeddings)
 - **Frontend:** Next.js 15 · React 19 · Tailwind CSS · Framer Motion
 - **Auth:** Supabase Auth (JWT)
-- **AI:** RAG pipeline with HNSW vector search, BM25 hybrid retrieval, semantic cache
+- **AI:** RAG pipeline with pgvector cosine search, MMR re-ranking, CASPER confidence scoring, BYOK runtime-configurable models
 
 ---
 

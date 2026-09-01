@@ -49,6 +49,7 @@ interface OrgRow {
   created_at: string;
   member_count: number;
   ticket_count: number;
+  plan_id?: string;
 }
 
 interface OrgMember {
@@ -218,6 +219,19 @@ export default function AdminOrganizationsPage() {
       await loadOrgs();
     } catch (e: any) {
       toast.error(e?.message || 'Failed to update organisation');
+    }
+  };
+
+  // ── Plan assignment ────────────────────────────────────────────────────────
+  const updatePlan = async (org: OrgRow, planId: string) => {
+    try {
+      await api.patch(`/api/admin/organizations/${org.id}/plan`, {
+        plan_id: planId,
+      });
+      toast.success(`Plan set to ${planId} for ${org.name}`);
+      await loadOrgs();
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to update plan');
     }
   };
 
@@ -396,6 +410,20 @@ export default function AdminOrganizationsPage() {
                     </div>
 
                     <div className="flex items-center gap-2 shrink-0">
+                      <Select
+                        value={org.plan_id || 'community'}
+                        onValueChange={v => updatePlan(org, v)}
+                      >
+                        <SelectTrigger className="h-8 w-[110px] text-xs">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="community">Community</SelectItem>
+                          <SelectItem value="starter">Starter</SelectItem>
+                          <SelectItem value="business">Business</SelectItem>
+                          <SelectItem value="enterprise">Enterprise</SelectItem>
+                        </SelectContent>
+                      </Select>
                       <Button
                         size="sm"
                         variant="ghost"

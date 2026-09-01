@@ -912,12 +912,13 @@ async def admin_list_organizations(
                 o.slug,
                 o.is_active,
                 o.created_at,
+                o.plan_id,
                 COUNT(om.user_id) AS member_count,
                 COUNT(t.id)       AS ticket_count
             FROM app.organizations o
             LEFT JOIN app.organization_members om ON om.organization_id = o.id
             LEFT JOIN app.tickets t              ON t.organization_id   = o.id
-            GROUP BY o.id, o.name, o.slug, o.is_active, o.created_at
+            GROUP BY o.id, o.name, o.slug, o.is_active, o.created_at, o.plan_id
             ORDER BY o.created_at DESC
             LIMIT $1 OFFSET $2
         """,
@@ -966,6 +967,40 @@ async def admin_update_organization(
         )
         if not row:
             raise HTTPException(404, "Organisation not found")
+        return dict(row)
+    finally:
+        await conn.close()
+
+
+@router.patch("/organizations/{org_id}/plan")
+async def admin_update_org_plan(
+    org_id: str,
+    body: dict,
+    user: User = Depends(get_current_user),
+):
+    """Set an organisation's plan (platform admin only, manual plan assignment)."""
+    await require_admin(user)
+    plan_id = (body.get("plan_id") or "").strip().lower()
+    valid_plans = {"community", "starter", "business", "enterprise"}
+    if plan_id not in valid_plans:
+        raise HTTPException(400, f"Invalid plan. Must be one of: {sorted(valid_plans)}")
+
+    from ..entitlements import _cache as _ent_cache
+
+    conn = await _get_db()
+    try:
+        row = await conn.fetchrow(
+            """UPDATE app.organizations
+               SET plan_id = $1, updated_at = NOW()
+               WHERE id = $2
+               RETURNING id::text, name, plan_id""",
+            plan_id,
+            org_id,
+        )
+        if not row:
+            raise HTTPException(404, "Organisation not found")
+        # Invalidate entitlements cache so the new plan applies immediately
+        _ent_cache.pop(org_id, None)
         return dict(row)
     finally:
         await conn.close()

@@ -254,5 +254,5 @@
 | C — Cost/Quota | ✅ | Re-embed eliminated (pgvector), AI quota 402 enforcement, slowapi rate limits on chat/create/ingest, DB-aware model logging. |
 | D — UI Polish | ✅ | Dead link fixed (?new=1), cosmetic toggles removed, real audit data in roles page, audit-log note cleaned, KB doc delete, ingest NameError fixed. |
 | E — AI + Agents | ✅ | Rep AI gated + feedback wired, Send-to-Customer agent action, KB-draft-from-ticket agent action. |
-| F — Pilot Kit | ⬜ | Plan assignment, BYOK onboarding, seed data. |
+| F — Pilot Kit | ✅ | Plan dropdown (admin), UpgradeBanner contact-us, AI status step in wizard, README stack claims fixed. |
 | G — Next Modules | ⬜ | AssetLog → ContractVault → Platform Hub. |

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/lib/supabaseClient';
@@ -60,6 +60,17 @@ const STEPS = [
   },
   {
     id: 3,
+    icon: Zap,
+    label: 'AI Engine',
+    time: '~15 sec',
+    headline: 'Your AI,\nyour keys.',
+    sub: 'TicketPilot runs on bring-your-own-key AI. See what engine is connected to your workspace.',
+    accent: 'from-amber-600 to-amber-400',
+    iconBg: 'bg-amber-500/10 border-amber-500/25',
+    iconColor: 'text-amber-400',
+  },
+  {
+    id: 4,
     icon: Users,
     label: 'Team',
     time: '~1 min',
@@ -70,7 +81,7 @@ const STEPS = [
     iconColor: 'text-emerald-400',
   },
   {
-    id: 4,
+    id: 5,
     icon: Rocket,
     label: 'Launch',
     time: 'Done',
@@ -459,7 +470,98 @@ function Step2({
 
 // ─── Step 3 ───────────────────────────────────────────────────────────────────
 
-function Step3({
+function Step3({ onNext, onSkip }: { onNext: () => void; onSkip: () => void }) {
+  const [status, setStatus] = useState<{
+    gen_model: string;
+    embed_model: string;
+    keys_configured: boolean;
+  } | null>(null);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    fetch(`${API_BASE}/api/ai/status`)
+      .then(res => (res.ok ? res.json() : Promise.reject(new Error('unavailable'))))
+      .then(data => {
+        if (active) setStatus(data);
+      })
+      .catch(() => {
+        if (active) setError('Could not reach AI engine');
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/25 flex items-center justify-center mb-4">
+          <Zap className="w-5 h-5 text-amber-400" />
+        </div>
+        <h2 className="text-xl font-bold text-white mb-1">AI engine status</h2>
+        <p className="text-sm text-zinc-400">
+          AI runs on bring-your-own-key providers. During the pilot, we configure
+          keys for you.
+        </p>
+      </div>
+
+      {status ? (
+        <div className="space-y-2 rounded-xl border border-zinc-800 bg-zinc-900/60 p-4">
+          <div className="flex items-center justify-between text-sm">
+            <span className="text-zinc-400">Generation model</span>
+            <span className="font-mono text-zinc-200">{status.gen_model}</span>
+          </div>
+          <div className="flex items-center justify-between text-sm">
+            <span className="text-zinc-400">Embedding model</span>
+            <span className="font-mono text-zinc-200">{status.embed_model}</span>
+          </div>
+          <div className="flex items-center justify-between text-sm">
+            <span className="text-zinc-400">Status</span>
+            {status.keys_configured ? (
+              <span className="flex items-center gap-1.5 text-emerald-400">
+                <CheckCircle2 className="w-4 h-4" /> Connected
+              </span>
+            ) : (
+              <span className="flex items-center gap-1.5 text-amber-400">
+                <Clock className="w-4 h-4" /> Keys not configured yet
+              </span>
+            )}
+          </div>
+          {!status.keys_configured && (
+            <p className="text-xs text-zinc-500 pt-1">
+              Contact us to bring your own keys — AI chat and citations turn on
+              immediately after.
+            </p>
+          )}
+        </div>
+      ) : (
+        <p className="text-sm text-zinc-500">
+          {error || 'Checking AI engine…'}
+        </p>
+      )}
+
+      <div className="flex gap-3">
+        <button
+          type="button"
+          onClick={onSkip}
+          className="flex-1 text-sm text-zinc-500 hover:text-zinc-300 border border-zinc-800 hover:border-zinc-700 rounded-lg px-4 py-2.5 transition-colors"
+        >
+          Skip for now
+        </button>
+        <button
+          type="button"
+          onClick={onNext}
+          className="flex-1 flex items-center justify-center gap-2 bg-zinc-800 hover:bg-zinc-700 text-white text-sm font-medium rounded-lg px-4 py-2.5 transition-colors"
+        >
+          Continue <ArrowRight className="w-4 h-4" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function Step4({
   onNext,
   onSkip,
   orgId,
@@ -631,7 +733,7 @@ const HIGHLIGHTS = [
   },
 ];
 
-function Step4({
+function Step5({
   orgId,
   refreshOrganizations,
 }: {
@@ -773,14 +875,17 @@ export default function OnboardingPage() {
                 />
               )}
               {step === 3 && (
-                <Step3
-                  orgId={orgId}
-                  onNext={() => setStep(4)}
-                  onSkip={() => setStep(4)}
-                />
+                <Step3 onNext={() => setStep(4)} onSkip={() => setStep(4)} />
               )}
               {step === 4 && (
                 <Step4
+                  orgId={orgId}
+                  onNext={() => setStep(5)}
+                  onSkip={() => setStep(5)}
+                />
+              )}
+              {step === 5 && (
+                <Step5
                   orgId={orgId}
                   refreshOrganizations={refreshOrganizations}
                 />
