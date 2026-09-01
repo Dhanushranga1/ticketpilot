@@ -146,6 +146,18 @@ async def set_role(
 
         invalidate_cache(user_id)
 
+        import asyncio as _aio
+
+        _aio.create_task(
+            log_audit(
+                "user.role.updated",
+                user,
+                resource_type="user_role",
+                resource_id=user_id,
+                metadata={"role": role},
+            )
+        )
+
         return {"ok": True}
     except HTTPException:
         raise
@@ -1290,13 +1302,13 @@ async def get_audit_log(
                 "limit": limit,
             }
         except Exception:
-            # Table doesn't exist yet — return empty result
+            # Table missing — migrations auto-apply on startup, this is defensive
             return {
                 "items": [],
                 "total": 0,
                 "offset": offset,
                 "limit": limit,
-                "note": "Audit log table not yet created",
+                "note": "Audit log unavailable",
             }
     finally:
         await conn.close()

@@ -183,7 +183,7 @@ async def ingest(
             return IngestResponse(
                 document_id=document_id,
                 chunks_ingested=len(unique_ids),
-                vectors_added=len(assigned_faiss_ids),
+                vectors_added=len(vectors),
             )
 
 
@@ -236,6 +236,46 @@ async def list_documents(request: Request, user: User = Depends(get_current_user
                 )
                 for row in rows
             ]
+
+
+@router.delete("/documents/{doc_id}")
+async def delete_document(
+    doc_id: str, request: Request, user: User = Depends(get_current_user)
+):
+    """Delete a KB document and its chunks (rep/admin only)."""
+    org_id = require_org_context(request)
+    require_rep(user)
+
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM app.documents
+                WHERE id = %s::uuid AND organization_id = %s
+                RETURNING id
+                """,
+                (doc_id, org_id),
+            )
+            deleted = cur.fetchone()
+            conn.commit()
+
+    if not deleted:
+        raise HTTPException(404, "Document not found in this organization")
+
+    import asyncio
+    from .admin import log_audit
+
+    asyncio.create_task(
+        log_audit(
+            "kb.document.deleted",
+            user,
+            resource_type="document",
+            resource_id=doc_id,
+            org_id=org_id,
+        )
+    )
+
+    return {"ok": True, "deleted": str(deleted["id"])}
 
 
 @router.get("/stats", response_model=KBStats)

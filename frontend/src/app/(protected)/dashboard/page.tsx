@@ -812,7 +812,7 @@ export default function DashboardPage() {
                       variant="default"
                       size="sm"
                       className="w-full justify-start"
-                      onClick={() => router.push('/tickets/new')}
+                      onClick={() => router.push('/tickets?new=1')}
                     >
                       <TicketIcon className="h-4 w-4 mr-2" />
                       New Ticket

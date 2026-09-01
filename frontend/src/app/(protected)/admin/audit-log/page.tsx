@@ -208,9 +208,7 @@ export default function AuditLogPage() {
         {note && (
           <Card className="border-amber-300 bg-amber-50 dark:bg-amber-950/20">
             <CardContent className="py-3 px-4 text-sm text-amber-700 dark:text-amber-400">
-              {note} — run migration{' '}
-              <code className="text-xs font-mono">0022_audit_log.sql</code> to
-              enable event recording.
+              {note}
             </CardContent>
           </Card>
         )}

@@ -37,7 +37,9 @@ import {
   X,
   RefreshCw,
   Sparkles,
+  Trash2,
 } from 'lucide-react';
+import { toast } from 'sonner';
 import { PageShell } from '@/ui/motion/PageShell';
 import { m } from 'framer-motion';
 import { v } from '@/ui/motion/variants';
@@ -147,6 +149,24 @@ export default function KnowledgeBasePage() {
       setDocuments([]);
     } finally {
       setDocumentsLoading(false);
+    }
+  };
+
+  const deleteDocument = async (docId: string) => {
+    if (!orgId) return;
+    if (
+      !window.confirm(
+        'Delete this document and all its chunks? The AI will no longer use it to answer questions.'
+      )
+    ) {
+      return;
+    }
+    try {
+      await api.delete(`/api/kb/documents/${docId}`, orgId);
+      toast.success('Document deleted');
+      loadDocuments();
+    } catch {
+      toast.error('Failed to delete document');
     }
   };
 
@@ -698,6 +718,9 @@ export default function KnowledgeBasePage() {
                               <th className="text-left px-4 py-2.5 text-xs font-semibold text-muted-foreground uppercase tracking-wide hidden md:table-cell">
                                 Added
                               </th>
+                              <th className="text-right px-4 py-2.5 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                                Actions
+                              </th>
                             </tr>
                           </thead>
                           <tbody>
@@ -752,6 +775,16 @@ export default function KnowledgeBasePage() {
                                       day: 'numeric',
                                       year: 'numeric',
                                     })}
+                                  </td>
+                                  <td className="px-4 py-3 text-right">
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      className="text-destructive hover:text-destructive"
+                                      onClick={() => deleteDocument(doc.id)}
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                    </Button>
                                   </td>
                                 </tr>
                               ))}
