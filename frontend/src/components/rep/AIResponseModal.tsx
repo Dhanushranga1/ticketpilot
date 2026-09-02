@@ -278,7 +278,7 @@ export function AIResponseModal({
 
             <Button onClick={handleInsert}>
               <MessageSquare className="h-4 w-4 mr-2" />
-              Insert Reply
+              Send to Customer
             </Button>
           </div>
         </div>

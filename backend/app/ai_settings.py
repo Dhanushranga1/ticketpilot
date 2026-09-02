@@ -97,8 +97,8 @@ def embed_dim() -> int:
         return int(explicit)
     # Auto-detect from model
     _DIM_MAP = {
-        "gemini-embedding-001": 3072,
-        "text-embedding-3-small": 512,
+        "gemini-embedding-001": 768,
+        "text-embedding-3-small": 1536,
         "text-embedding-3-large": 3072,
     }
     return _DIM_MAP.get(embed_model(), 768)

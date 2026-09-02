@@ -310,6 +310,33 @@ def get_rag_analytics(hours: int = 24) -> Dict[str, Any]:
                     for row in cursor.fetchall()
                 ]
 
+                # AI feedback (thumbs) — collected from app.ai_feedback
+                try:
+                    cursor.execute(
+                        """
+                        SELECT
+                            COUNT(*) FILTER (WHERE feedback_type = 'positive') as positive,
+                            COUNT(*) FILTER (WHERE feedback_type = 'negative') as negative
+                        FROM app.ai_feedback
+                        WHERE created_at >= %s
+                        """,
+                        (start_time,),
+                    )
+                    fb = cursor.fetchone()
+                    fb_pos = int(fb["positive"] or 0)
+                    fb_neg = int(fb["negative"] or 0)
+                    feedback_stats = {
+                        "positive": fb_pos,
+                        "negative": fb_neg,
+                        "total": fb_pos + fb_neg,
+                        "positive_rate": (
+                            fb_pos / (fb_pos + fb_neg) if (fb_pos + fb_neg) > 0 else None
+                        ),
+                    }
+                except Exception as fb_err:
+                    logger.warning("Feedback stats query failed: %s", fb_err)
+                    feedback_stats = {"positive": 0, "negative": 0, "total": 0, "positive_rate": None}
+
                 return {
                     "time_window_hours": hours,
                     "total_operations": stats["total_operations"] if stats else 0,
@@ -335,6 +362,7 @@ def get_rag_analytics(hours: int = 24) -> Dict[str, Any]:
                     ),
                     "confidence_distribution": confidence_dist,
                     "model_performance": model_performance,
+                    "feedback": feedback_stats,
                 }
 
     except Exception as e:

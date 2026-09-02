@@ -55,43 +55,6 @@ logger.info(
 )
 
 
-def _check_faiss_indices():
-    """
-    Warn if the FAISS data directory is empty.
-
-    FAISS indices live under data/faiss/<org_id>/ and are NOT committed to git.
-    On ephemeral cloud deployments (Render, Railway, etc.) the filesystem is wiped
-    on every deploy, so all indices are lost. When this warning fires, admins must
-    re-upload KB documents to rebuild the indices before the AI assistant returns
-    useful answers.
-    """
-    index_dir = os.getenv("VECTOR_INDEX_DIR", "./data/faiss")
-    if not os.path.isdir(index_dir):
-        logger.warning(
-            "FAISS data directory '%s' does not exist — no KB indices loaded. "
-            "AI responses will have low confidence until documents are re-uploaded. "
-            "On ephemeral deployments KB documents must be re-uploaded after every deploy.",
-            index_dir,
-        )
-        return
-
-    org_dirs = [
-        d for d in os.listdir(index_dir) if os.path.isdir(os.path.join(index_dir, d))
-    ]
-    if not org_dirs:
-        logger.warning(
-            "FAISS data directory '%s' exists but contains no org indices — "
-            "AI responses will have low confidence until documents are re-uploaded.",
-            index_dir,
-        )
-    else:
-        logger.info(
-            "FAISS: found indices for %d organisation(s): %s",
-            len(org_dirs),
-            org_dirs,
-        )
-
-
 _PRIORITY_DEFAULT_HOURS = {1: 168, 2: 72, 3: 48, 4: 24, 5: 12, 6: 6, 7: 7}
 
 
@@ -357,26 +320,6 @@ async def _pool_keepalive():
             logger.warning("[keepalive] pool ping failed: %s", type(exc).__name__)
 
 
-async def _rebuild_one_org(org_id: str, load_snapshot_fn, rebuild_fn) -> None:
-    """Try snapshot load first; fall back to full per-vector rebuild for one org."""
-    try:
-        count = await load_snapshot_fn(org_id)
-        if count is not None:
-            logger.info(
-                "[startup] org %s loaded from snapshot (%d vectors)", org_id, count
-            )
-            return
-        count = await rebuild_fn(org_id)
-        if count:
-            logger.info(
-                "[startup] org %s rebuilt from embeddings (%d vectors)", org_id, count
-            )
-        else:
-            logger.info("[startup] org %s has no embeddings yet", org_id)
-    except Exception as exc:
-        logger.warning("[startup] org %s rebuild failed: %s", org_id, exc)
-
-
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     from .db import close_pool, init_pool
@@ -401,38 +344,8 @@ async def lifespan(_app: FastAPI):
             "ENVIRONMENT=development but WEB_ORIGIN is a remote URL — check config!"
         )
 
-    # Rebuild per-org FAISS indexes on cold start (Render free-tier spin-up / redeploy).
-    # Strategy: discover every org that has stored embeddings, try snapshot first,
-    # fall back to full rebuild from individual vectors.
-    _check_faiss_indices()
-    try:
-        from .db import get_connection
-        from .store import load_org_snapshot, rebuild_org_from_db
-
-        conn = await get_connection()
-        try:
-            org_rows = await conn.fetch(
-                "SELECT DISTINCT organization_id FROM app.chunks WHERE embedding IS NOT NULL"
-            )
-        finally:
-            await conn.close()
-
-        org_ids = [str(r["organization_id"]) for r in org_rows if r["organization_id"]]
-        if org_ids:
-            logger.info(
-                "[startup] Rebuilding FAISS for %d org(s): %s", len(org_ids), org_ids
-            )
-            rebuild_tasks = [
-                _rebuild_one_org(org_id, load_org_snapshot, rebuild_org_from_db)
-                for org_id in org_ids
-            ]
-            await asyncio.gather(*rebuild_tasks)
-        else:
-            logger.info(
-                "[startup] No stored embeddings in DB yet — FAISS indexes will be built on first ingest"
-            )
-    except Exception as exc:
-        logger.error("[startup] Per-org FAISS rebuild failed: %s", exc)
+    # pgvector indices live in the database — no cold-start rebuild needed.
+    # (FAISS on-disk indices were wiped on every deploy; pgvector persists with the table.)
 
     task = asyncio.create_task(_overdue_task())
     keepalive = asyncio.create_task(_pool_keepalive())
@@ -528,20 +441,18 @@ app.include_router(entitlements_router)
 
 @app.get("/api/health")
 async def health():
-    """Health check with FAISS, DB pool, and background task status."""
+    """Health check with DB pool and background task status."""
     import time as _time
 
     from .db import _pool as _asyncpg_pool
-    from .store import _cache as _faiss_cache
 
-    faiss_org_count = len(_faiss_cache) if _faiss_cache is not None else 0
     pool_ok = _asyncpg_pool is not None and not _asyncpg_pool._closed
 
     return {
         "ok": True,
         "api": "ticketpilot",
         "version": API_VERSION,
-        "faiss_orgs_cached": faiss_org_count,
+        "vector_store": "pgvector",
         "db_pool_connected": pool_ok,
         "timestamp": _time.time(),
     }

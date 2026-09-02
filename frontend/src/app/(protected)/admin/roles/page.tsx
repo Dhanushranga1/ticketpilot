@@ -220,49 +220,45 @@ export default function AdminRolesPage() {
 
   const loadRecentActivity = async (usersData?: User[]) => {
     try {
-      // Use passed usersData or fall back to state
-      const currentUsers = usersData || users;
+      const { data: sessionData } = await supabase.auth.getSession();
+      if (!sessionData.session) {
+        router.push('/login');
+        return;
+      }
+      const token = sessionData.session.access_token;
 
-      // Since we don't have an activity endpoint yet, generate mock activity
-      // based on recent role changes from the users data
-      const mockActivities: UserActivity[] = currentUsers
-        .slice(0, 5)
-        .map((user, index) => ({
-          id: `activity-${user.id}-${index}`,
-          user_id: user.id,
-          action: `Role updated to ${user.role}`,
-          timestamp: user.created_at,
-          details: `User ${user.email} was assigned ${user.role} role`,
-        }));
-
-      // Add some system activities
-      const systemActivities: UserActivity[] = [
+      const response = await fetch(
+        `${API_BASE}/api/admin/audit-log?limit=10`,
         {
-          id: 'sys-1',
-          user_id: 'system',
-          action: 'Admin panel accessed',
-          timestamp: new Date().toISOString(),
-          details: 'Admin roles management panel was accessed',
-        },
-        {
-          id: 'sys-2',
-          user_id: 'system',
-          action: 'User permissions checked',
-          timestamp: new Date(Date.now() - 300000).toISOString(), // 5 minutes ago
-          details: 'System verified admin permissions',
-        },
-      ];
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        }
+      );
 
-      const allActivities = [...systemActivities, ...mockActivities]
-        .sort(
-          (a, b) =>
-            new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-        )
-        .slice(0, 10); // Show last 10 activities
+      if (!response.ok) {
+        setUserActivities([]);
+        return;
+      }
 
-      setUserActivities(allActivities);
+      const data = await response.json();
+      const items: any[] = data.items || [];
+
+      const activities: UserActivity[] = items.map(item => ({
+        id: item.id || String(Math.random()),
+        user_id: item.actor_id || 'system',
+        action: item.action || 'Unknown action',
+        timestamp: item.created_at || new Date().toISOString(),
+        details: item.actor_email
+          ? `${item.actor_email} — ${item.action}`
+          : item.action,
+      }));
+
+      setUserActivities(activities.slice(0, 10));
     } catch (error) {
       console.error('Error loading user activity:', error);
+      setUserActivities([]);
     }
   };
 

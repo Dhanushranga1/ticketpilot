@@ -118,7 +118,7 @@ function SignupPageInner() {
       email,
       password,
       options: {
-        emailRedirectTo: `${window.location.origin}/auth/callback${next}`,
+        emailRedirectTo: `${window.location.origin}/auth/confirm${next}`,
       },
     });
     setLoading(false);
@@ -143,7 +143,7 @@ function SignupPageInner() {
     const { error } = await supabase.auth.signInWithOtp({
       email,
       options: {
-        emailRedirectTo: `${window.location.origin}/auth/callback${next}`,
+        emailRedirectTo: `${window.location.origin}/auth/confirm${next}`,
       },
     });
     setMagicLoading(false);

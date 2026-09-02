@@ -33,7 +33,7 @@ def _build_pool() -> ConnectionPool | None:
     try:
         pool = ConnectionPool(
             DATABASE_URL,
-            min_size=0,  # no background connections when idle
+            min_size=1,  # keep 1 warm conn — cold connects made gated endpoints take seconds
             max_size=2,  # hard cap — Supabase free tier
             max_waiting=10,  # queue requests rather than blow up
             max_idle=300,

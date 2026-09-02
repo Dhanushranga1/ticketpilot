@@ -19,10 +19,16 @@ GROUP BY organization_id, status;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_ticket_counts_org_status
   ON app.mv_ticket_counts(organization_id, status);
 
--- pg_cron refresh every 5 minutes (run in Supabase SQL editor as superuser if needed)
--- Requires: Dashboard → Database → Extensions → enable pg_cron
-SELECT cron.schedule(
-  'refresh-mv-ticket-counts',
-  '*/5 * * * *',
-  $$REFRESH MATERIALIZED VIEW CONCURRENTLY app.mv_ticket_counts$$
-);
+-- pg_cron refresh every 5 minutes (runs only when pg_cron extension is present)
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN
+    EXECUTE format(
+      'SELECT cron.schedule(%L, %L, %L)',
+      'refresh-mv-ticket-counts',
+      '*/5 * * * *',
+      'REFRESH MATERIALIZED VIEW CONCURRENTLY app.mv_ticket_counts'
+    );
+  END IF;
+END
+$$;

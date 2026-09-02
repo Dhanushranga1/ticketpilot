@@ -31,7 +31,7 @@ CASPER INNOVATIONS
    log(num_chunks+1).  Sparse KBs receive a calibrated discount; dense KBs are
    trusted more.
 
-3. **Retrieval-spread penalty** — high variance in FAISS scores means the top hit
+3. **Retrieval-spread penalty** — high variance in retrieval scores means the top hit
    is dominant while lower hits are poor matches; the algorithm penalises this
    over-reliance on a single source.
 
@@ -51,7 +51,7 @@ WEIGHT DERIVATION METHODOLOGY
 Weights for each intent class were derived using the following process:
 
   a) Enumerated 120 synthetic test scenarios (30 per intent class) varying:
-       - FAISS score quality (0.2–0.95)
+       - Retrieval score quality (0.2–0.95)
        - Number of citations used (0–6)
        - Response length (50–800 chars)
        - Semantic coherence level (0.2–0.95)
@@ -441,7 +441,7 @@ def casper_confidence(
     Parameters
     ----------
     scores : List[float]
-        Raw FAISS cosine-similarity scores for retrieved chunks.
+        Raw cosine-similarity scores for retrieved chunks.
     model_output : str
         The LLM-generated response text.
     num_chunks : int

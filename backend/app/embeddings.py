@@ -5,6 +5,7 @@ first, env vars as fallback.
 
 import asyncio
 import logging
+import os
 import time
 from typing import List
 
@@ -22,8 +23,6 @@ RETRY_DELAY_429 = 15.0
 INTER_BATCH_DELAY = 0.5
 BATCH_SIZE = 20
 MAX_TEXT_LENGTH = 20000
-
-EMBEDDING_DIM = _embed_dim()
 
 
 def _is_rate_limit(exc: Exception) -> bool:
@@ -92,7 +91,6 @@ async def _call_google_async(texts: List[str], api_key: str) -> List[List[float]
 
 
 def _openai_embed_url() -> str:
-    base = embed_api_key() and ""  # placeholder for future overrides
     return os.getenv("EMBEDDING_API_BASE", "https://api.openai.com/v1/embeddings")
 
 
@@ -162,8 +160,8 @@ async def _call_jina_async(texts: List[str], api_key: str) -> List[List[float]]:
 
 
 # ── Router ──────────────────────────────────────────────────
-
-_provider = _detect_provider(embed_model())
+# Provider detected per call from the current model name — admin UI changes
+# take effect immediately without a restart.
 
 _call_map = {
     "google": (_call_google, _call_google_async),
@@ -172,12 +170,16 @@ _call_map = {
 }
 
 
+def _current_provider() -> str:
+    return _detect_provider(embed_model())
+
+
 def _call(texts: List[str], api_key: str) -> List[List[float]]:
-    return _call_map[_provider][0](texts, api_key)
+    return _call_map[_current_provider()][0](texts, api_key)
 
 
 async def _call_async(texts: List[str], api_key: str) -> List[List[float]]:
-    return await _call_map[_provider][1](texts, api_key)
+    return await _call_map[_current_provider()][1](texts, api_key)
 
 
 # ── Public API ──────────────────────────────────────────────
@@ -194,7 +196,7 @@ def _clean(text: str) -> str:
 
 
 def embed_single_text_with_retry(text: str) -> List[float]:
-    api_key = _get_api_key(_provider)
+    api_key = _get_api_key(_current_provider())
     validated = _clean(text)
     for attempt in range(MAX_RETRY_ATTEMPTS):
         try:
@@ -219,13 +221,15 @@ def embed_single_text_with_retry(text: str) -> List[float]:
 def embed_texts(texts: List[str]) -> List[List[float]]:
     if not texts:
         raise EmbeddingError("Cannot embed empty list of texts")
-    api_key = _get_api_key(_provider)
+    provider = _current_provider()
+    dim = _embed_dim()
+    api_key = _get_api_key(provider)
     cleaned = [_clean(t) for t in texts]
     embeddings: List[List[float]] = []
     failed_count = 0
     total_batches = (len(cleaned) + BATCH_SIZE - 1) // BATCH_SIZE
     logger.info(
-        f"Embedding {len(cleaned)} texts in {total_batches} batch(es) via {_provider}/{embed_model()}"
+        f"Embedding {len(cleaned)} texts in {total_batches} batch(es) via {provider}/{embed_model()}"
     )
 
     for i, batch_start in enumerate(range(0, len(cleaned), BATCH_SIZE)):
@@ -242,7 +246,7 @@ def embed_texts(texts: List[str]) -> List[List[float]]:
                     time.sleep(RETRY_DELAY_SECONDS * (attempt + 1))
                 else:
                     failed_count += len(batch)
-                    embeddings.extend([[0.0] * EMBEDDING_DIM] * len(batch))
+                    embeddings.extend([[0.0] * dim] * len(batch))
         if i < total_batches - 1:
             time.sleep(INTER_BATCH_DELAY)
 
@@ -257,13 +261,15 @@ def embed_texts(texts: List[str]) -> List[List[float]]:
 async def embed_texts_async(texts: List[str]) -> List[List[float]]:
     if not texts:
         raise EmbeddingError("Cannot embed empty list of texts")
-    api_key = _get_api_key(_provider)
+    provider = _current_provider()
+    dim = _embed_dim()
+    api_key = _get_api_key(provider)
     cleaned = [_clean(t) for t in texts]
     embeddings: List[List[float]] = []
     failed_count = 0
     total_batches = (len(cleaned) + BATCH_SIZE - 1) // BATCH_SIZE
     logger.info(
-        f"Embedding {len(cleaned)} texts in {total_batches} batch(es) via {_provider}/{embed_model()} (async)"
+        f"Embedding {len(cleaned)} texts in {total_batches} batch(es) via {provider}/{embed_model()} (async)"
     )
 
     for i, batch_start in enumerate(range(0, len(cleaned), BATCH_SIZE)):
@@ -285,7 +291,7 @@ async def embed_texts_async(texts: List[str]) -> List[List[float]]:
                     await asyncio.sleep(delay)
                 else:
                     failed_count += len(batch)
-                    embeddings.extend([[0.0] * EMBEDDING_DIM] * len(batch))
+                    embeddings.extend([[0.0] * dim] * len(batch))
         if i < total_batches - 1:
             await asyncio.sleep(INTER_BATCH_DELAY)
 

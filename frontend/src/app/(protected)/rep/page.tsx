@@ -56,6 +56,8 @@ import {
   Mail,
   Bot,
   CheckCheck,
+  FileText,
+  Loader2,
 } from 'lucide-react';
 import { m } from 'framer-motion';
 import { v } from '@/ui/motion/variants';
@@ -530,26 +532,27 @@ export default function RepConsolePage() {
   };
 
   // AI Modal Handlers
-  const handleAiInsert = (content: string) => {
-    // For now, copy to clipboard and show notification
-    // In a full implementation, this would insert into a reply composition area
-    navigator.clipboard
-      .writeText(content)
-      .then(() => {
-        toast.success(
-          'AI suggestion copied to clipboard - paste it into your reply'
-        );
-      })
-      .catch(() => {
-        toast.error('Failed to copy suggestion');
-      });
-
-    // Add audit trail
-    if (currentAiTicket) {
+  const handleAiInsert = async (content: string) => {
+    if (!currentAiTicket || !orgId) {
+      toast.error('No ticket context');
+      return;
+    }
+    try {
+      await api.post(
+        `/api/tickets/${currentAiTicket}/messages`,
+        { body: content },
+        orgId
+      );
+      toast.success('Reply sent to customer');
+      setAiModalOpen(false);
       addAuditMessage(
         currentAiTicket,
-        `AI suggestion applied (confidence ${Math.round((aiResponse?.confidence || 0) * 100)}%, model ${aiResponse?.model || 'unknown'})`
+        `AI drafted reply sent (confidence ${Math.round((aiResponse?.confidence || 0) * 100)}%)`
       );
+      await loadTickets();
+    } catch (error) {
+      console.error('Failed to send draft:', error);
+      toast.error('Failed to send reply');
     }
   };
 
@@ -572,8 +575,22 @@ export default function RepConsolePage() {
     }
   };
 
-  const handleAiFeedback = (_positive: boolean) => {
-    // TODO: send feedback to analytics endpoint
+  const handleAiFeedback = async (positive: boolean) => {
+    const messageId = aiResponse?.message_id;
+    if (!messageId || !orgId) return;
+    try {
+      await api.post(
+        '/api/ai/feedback',
+        {
+          message_id: messageId,
+          feedback_type: positive ? 'positive' : 'negative',
+        },
+        orgId
+      );
+      toast.success('Thanks for the feedback!');
+    } catch {
+      toast.error('Failed to submit feedback');
+    }
   };
 
   const addAuditMessage = async (ticketId: string, message: string) => {
@@ -805,6 +822,78 @@ export default function RepConsolePage() {
     setShowKBModal(false);
   };
 
+  // ── KB Draft from resolved ticket (agent action) ──
+  const [kbDraftOpen, setKbDraftOpen] = useState(false);
+  const [kbDraftLoading, setKbDraftLoading] = useState(false);
+  const [kbDraftSaving, setKbDraftSaving] = useState(false);
+  const [kbDraft, setKbDraft] = useState<{
+    ticket_id: string;
+    title: string;
+    content: string;
+  } | null>(null);
+
+  const handleKBDraft = async (ticket: any) => {
+    if (!orgId) return;
+    setKbDraftLoading(true);
+    setKbDraft(null);
+    setKbDraftOpen(true);
+    try {
+      const draft = await api.post(
+        `/api/tickets/${ticket.id}/ai-kb-draft`,
+        {},
+        orgId
+      );
+      setKbDraft(draft);
+    } catch (error: any) {
+      const msg =
+        error?.message?.includes('402')
+          ? 'AI features require Starter plan or above'
+          : 'Failed to generate KB draft';
+      toast.error(msg);
+      setKbDraftOpen(false);
+    } finally {
+      setKbDraftLoading(false);
+    }
+  };
+
+  const handleKBCreateFromDraft = async () => {
+    if (!kbDraft || !orgId) return;
+    setKbDraftSaving(true);
+    try {
+      const formData = new FormData();
+      formData.append('raw_text', kbDraft.content);
+      formData.append('filename', `${kbDraft.title}.md`);
+
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData?.session?.access_token;
+
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000'}/api/kb/ingest`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'X-Organization-ID': orgId,
+          },
+          body: formData,
+        }
+      );
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`KB ingest failed: ${errorText}`);
+      }
+
+      toast.success('KB document created from ticket');
+      setKbDraftOpen(false);
+      setKbDraft(null);
+    } catch {
+      toast.error('Failed to create KB document');
+    } finally {
+      setKbDraftSaving(false);
+    }
+  };
+
   const formatTimeAgo = (dateString: string) => {
     const date = new Date(dateString);
     const now = new Date();
@@ -1006,6 +1095,62 @@ export default function RepConsolePage() {
                 onEscalate={handleAiEscalate}
                 onFeedback={handleAiFeedback}
               />
+
+              {/* KB draft from resolved ticket */}
+              <Dialog open={kbDraftOpen} onOpenChange={setKbDraftOpen}>
+                <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+                  <DialogHeader>
+                    <DialogTitle className="flex items-center gap-2">
+                      <FileText className="h-5 w-5 text-indigo-500" />
+                      KB Article Draft
+                    </DialogTitle>
+                  </DialogHeader>
+                  {kbDraftLoading ? (
+                    <div className="flex justify-center py-12">
+                      <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                    </div>
+                  ) : kbDraft ? (
+                    <div className="space-y-4">
+                      <div className="space-y-1">
+                        <Label>Title</Label>
+                        <Input
+                          value={kbDraft.title}
+                          onChange={e =>
+                            setKbDraft({ ...kbDraft, title: e.target.value })
+                          }
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label>Content</Label>
+                        <Textarea
+                          value={kbDraft.content}
+                          onChange={e =>
+                            setKbDraft({ ...kbDraft, content: e.target.value })
+                          }
+                          className="min-h-[240px] font-mono text-xs"
+                        />
+                      </div>
+                      <DialogFooter>
+                        <Button
+                          variant="outline"
+                          onClick={() => {
+                            setKbDraftOpen(false);
+                            setKbDraft(null);
+                          }}
+                        >
+                          Cancel
+                        </Button>
+                        <Button
+                          onClick={handleKBCreateFromDraft}
+                          disabled={kbDraftSaving || !kbDraft.content.trim()}
+                        >
+                          {kbDraftSaving ? 'Creating…' : 'Create KB Document'}
+                        </Button>
+                      </DialogFooter>
+                    </div>
+                  ) : null}
+                </DialogContent>
+              </Dialog>
 
               {/* Escalation dialog */}
               <Dialog
@@ -1545,46 +1690,77 @@ export default function RepConsolePage() {
                               color: 'text-purple-500',
                               onClick: () => handleQuickEmail(ticket),
                             },
-                            {
-                              id: 'ai-assist',
-                              label: (() => {
-                                const cooldownEnd = aiCooldowns[ticket.id];
-                                if (cooldownEnd && cooldownEnd > Date.now()) {
-                                  const remainingSeconds = Math.ceil(
-                                    (cooldownEnd - Date.now()) / 1000
-                                  );
-                                  return `AI (${remainingSeconds}s)`;
-                                }
-                                return 'Get AI Suggestion';
-                              })(),
-                              description: (() => {
-                                const cooldownEnd = aiCooldowns[ticket.id];
-                                if (cooldownEnd && cooldownEnd > Date.now()) {
-                                  return 'Rate limited - please wait';
-                                }
-                                return 'AI will analyze this ticket and suggest a response';
-                              })(),
-                              icon: Bot,
-                              color:
-                                aiCooldowns[ticket.id] &&
-                                aiCooldowns[ticket.id] > Date.now()
-                                  ? 'text-muted-foreground'
-                                  : 'text-primary',
-                              onClick: () => {
-                                const cooldownEnd = aiCooldowns[ticket.id];
-                                if (cooldownEnd && cooldownEnd > Date.now()) {
-                                  const remainingSeconds = Math.ceil(
-                                    (cooldownEnd - Date.now()) / 1000
-                                  );
-                                  toast.error(
-                                    `Please wait ${remainingSeconds} seconds`,
-                                    { id: 'ai-cooldown-' + ticket.id }
-                                  );
-                                  return;
-                                }
-                                handleQuickAI(ticket);
-                              },
-                            },
+                            ...(can('ai_rag')
+                              ? [
+                                  {
+                                    id: 'ai-assist',
+                                    label: (() => {
+                                      const cooldownEnd =
+                                        aiCooldowns[ticket.id];
+                                      if (
+                                        cooldownEnd &&
+                                        cooldownEnd > Date.now()
+                                      ) {
+                                        const remainingSeconds = Math.ceil(
+                                          (cooldownEnd - Date.now()) / 1000
+                                        );
+                                        return `AI (${remainingSeconds}s)`;
+                                      }
+                                      return 'Get AI Suggestion';
+                                    })(),
+                                    description: (() => {
+                                      const cooldownEnd =
+                                        aiCooldowns[ticket.id];
+                                      if (
+                                        cooldownEnd &&
+                                        cooldownEnd > Date.now()
+                                      ) {
+                                        return 'Rate limited - please wait';
+                                      }
+                                      return 'AI will analyze this ticket and suggest a response';
+                                    })(),
+                                    icon: Bot,
+                                    color:
+                                      aiCooldowns[ticket.id] &&
+                                      aiCooldowns[ticket.id] > Date.now()
+                                        ? 'text-muted-foreground'
+                                        : 'text-primary',
+                                    onClick: () => {
+                                      const cooldownEnd =
+                                        aiCooldowns[ticket.id];
+                                      if (
+                                        cooldownEnd &&
+                                        cooldownEnd > Date.now()
+                                      ) {
+                                        const remainingSeconds = Math.ceil(
+                                          (cooldownEnd - Date.now()) / 1000
+                                        );
+                                        toast.error(
+                                          `Please wait ${remainingSeconds} seconds`,
+                                          { id: 'ai-cooldown-' + ticket.id }
+                                        );
+                                        return;
+                                      }
+                                      handleQuickAI(ticket);
+                                    },
+                                  },
+                                ]
+                              : []),
+                            ...(can('ai_rag') &&
+                            can('kb') &&
+                            ['resolved', 'closed'].includes(ticket.status)
+                              ? [
+                                  {
+                                    id: 'kb-draft',
+                                    label: 'Draft KB Article',
+                                    description:
+                                      'AI summarises this ticket into a knowledge base article',
+                                    icon: FileText,
+                                    color: 'text-indigo-500',
+                                    onClick: () => handleKBDraft(ticket),
+                                  },
+                                ]
+                              : []),
                           ]}
                           primaryActions={[
                             ...(['open', 'escalated'].includes(ticket.status)
@@ -1666,11 +1842,9 @@ export default function RepConsolePage() {
 
         {/* AI Assistant */}
         <AIMessage
-          content="I'm here to help you manage your ticket queue efficiently. I can suggest prioritizations, provide insights on customer sentiment, and help draft responses."
+          content="I'm here to help you manage your ticket queue efficiently. Use 'AI Suggestion' on any ticket to get a draft reply."
           type="suggestion"
-          onCopy={() => {}}
-          onFeedback={() => {}}
-          showActions={true}
+          showActions={false}
         />
 
         {/* Pagination */}

@@ -55,9 +55,6 @@ export default function AdminSettingsPage() {
     requireApproval: true,
     maxFileSize: '10',
     sessionTimeout: '24',
-    backupEnabled: true,
-    maintenanceMode: false,
-    debugMode: false,
   });
 
   const PRIORITY_LABELS: Record<number, string> = {
@@ -536,60 +533,6 @@ export default function AdminSettingsPage() {
           </CardContent>
         </Card>
 
-        {/* System Settings */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Database className="h-5 w-5" />
-              System
-            </CardTitle>
-            <CardDescription>System maintenance and debugging</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="flex items-center justify-between">
-              <div className="space-y-0.5">
-                <Label>Backup Enabled</Label>
-                <p className="text-sm text-muted-foreground">
-                  Automatic daily backups
-                </p>
-              </div>
-              <Switch
-                checked={settings.backupEnabled}
-                onCheckedChange={(checked: boolean) =>
-                  setSettings({ ...settings, backupEnabled: checked })
-                }
-              />
-            </div>
-            <div className="flex items-center justify-between">
-              <div className="space-y-0.5">
-                <Label>Maintenance Mode</Label>
-                <p className="text-sm text-muted-foreground">
-                  Block user access for maintenance
-                </p>
-              </div>
-              <Switch
-                checked={settings.maintenanceMode}
-                onCheckedChange={(checked: boolean) =>
-                  setSettings({ ...settings, maintenanceMode: checked })
-                }
-              />
-            </div>
-            <div className="flex items-center justify-between">
-              <div className="space-y-0.5">
-                <Label>Debug Mode</Label>
-                <p className="text-sm text-muted-foreground">
-                  Enable detailed error logging
-                </p>
-              </div>
-              <Switch
-                checked={settings.debugMode}
-                onCheckedChange={(checked: boolean) =>
-                  setSettings({ ...settings, debugMode: checked })
-                }
-              />
-            </div>
-          </CardContent>
-        </Card>
       </div>
 
       {/* Attention Thresholds */}

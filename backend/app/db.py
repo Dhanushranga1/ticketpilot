@@ -61,6 +61,10 @@ async def _circuit_failure():
 
 
 def _ssl_mode(database_url: str) -> str:
+    # Supabase requires SSL. Local dev (docker postgres) needs disable/prefer.
+    explicit = os.getenv("DB_SSL_MODE", "").strip().lower()
+    if explicit in ("require", "prefer", "disable", "allow", "verify-full"):
+        return explicit
     return "require"
 
 
@@ -76,7 +80,7 @@ async def init_pool() -> None:
         _pool = await asyncpg.create_pool(
             database_url,
             password=db_password,
-            min_size=0,
+            min_size=1,  # keep 1 warm conn — min_size=0 made every idle request pay full connect latency
             max_size=3,
             max_inactive_connection_lifetime=300.0,
             command_timeout=8,
@@ -88,7 +92,12 @@ async def init_pool() -> None:
                 "statement_timeout": "8000",
             },
         )
-        logger.info("[db] asyncpg pool ready (min=0, max=3, ssl=%s)", ssl)
+        logger.info(
+            "[db] asyncpg pool ready (min_size=%d, max_size=%d, ssl=%s)",
+            1,
+            3,
+            ssl,
+        )
         await _circuit_success()
     except Exception as exc:
         logger.error(

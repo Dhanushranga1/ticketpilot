@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import time
 import uuid
@@ -17,10 +18,12 @@ from .email import (
     send_ticket_created_for_customer_email,
     send_ticket_resolved_email,
 )
+from .ai_settings import gen_model
 from .observability import get_observer, log_rag_metrics
 from .org_middleware import require_org_context
 from .entitlements import requires_feature
 from .rag_scoring import casper_route, profile_ticket
+from .security import limiter
 from .schemas import (
     BulkTicketRequest,
     ChatRequest,
@@ -37,7 +40,8 @@ from .schemas import (
     TicketSummary,
     TicketWithMessages,
 )
-)
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["tickets"])
 
@@ -101,6 +105,7 @@ def is_rep_in_org(user: User, request: Request) -> bool:
 @router.post(
     "/tickets", response_model=TicketDetail, status_code=status.HTTP_201_CREATED
 )
+@limiter.limit("20/minute")
 def create_ticket(
     payload: TicketCreate, request: Request, user: User = Depends(get_current_user)
 ):
@@ -833,6 +838,75 @@ CHAT_COOLDOWN_SECONDS = int(os.getenv("CHAT_COOLDOWN_SECONDS", "8"))
 CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.55"))
 CONFIDENCE_MIN_CHUNKS = int(os.getenv("CONFIDENCE_MIN_CHUNKS", "2"))
 
+# Answer cache — key: f"{org_id}:{prompt_hash}" → (payload, monotonic_ts)
+_answer_cache: Dict[str, Tuple[dict, float]] = {}
+ANSWER_CACHE_TTL = float(os.getenv("ANSWER_CACHE_TTL_SECONDS", "600"))
+ANSWER_CACHE_MAX = int(os.getenv("ANSWER_CACHE_MAX_ENTRIES", "500"))
+
+
+def invalidate_answer_cache(org_id: str) -> None:
+    """Drop cached answers for an org (KB changed)."""
+    prefix = f"{org_id}:"
+    for key in [k for k in _answer_cache if k.startswith(prefix)]:
+        _answer_cache.pop(key, None)
+
+
+@router.post("/tickets/{ticket_id}/ai-kb-draft")
+def ai_kb_draft(
+    ticket_id: str,
+    request: Request,
+    user: User = Depends(get_current_user),
+    _gate: None = requires_feature("ai_rag"),
+):
+    """Agent action: draft a KB article from a resolved ticket's conversation."""
+    org_id = require_org_context(request)
+    if not is_rep_in_org(user, request):
+        raise HTTPException(status_code=403, detail="Rep access required")
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT t.id, t.title, t.status, t.description
+            FROM app.tickets t
+            WHERE t.id = %s AND t.organization_id = %s
+        """,
+            (ticket_id, org_id),
+        )
+        ticket_row = cursor.fetchone()
+        if not ticket_row:
+            raise HTTPException(status_code=404, detail="Ticket not found")
+
+        cursor.execute(
+            """
+            SELECT sender_role, body, created_at
+            FROM app.messages
+            WHERE ticket_id = %s AND organization_id = %s AND is_internal = false
+            ORDER BY created_at ASC
+            LIMIT 50
+        """,
+            (ticket_id, org_id),
+        )
+        message_rows = cursor.fetchall()
+
+    conversation_parts = [f"Ticket: {ticket_row['title']}"]
+    if ticket_row.get("description"):
+        conversation_parts.append(f"Initial description: {ticket_row['description']}")
+    for m in message_rows:
+        role = m["sender_role"]
+        conversation_parts.append(f"{role.upper()}: {m['body']}")
+    conversation = "\n\n".join(conversation_parts)
+
+    from .ai import generate_kb_draft
+
+    try:
+        title, content = generate_kb_draft(conversation)
+    except Exception as e:
+        logger.error("KB draft generation failed for ticket %s: %s", ticket_id, e)
+        raise HTTPException(status_code=502, detail="AI generation failed")
+
+    return {"ticket_id": ticket_id, "title": title, "content": content}
+
 
 def fetch_chunks_by_faiss_ids(faiss_ids: List[int], org_id: str) -> List[dict]:
     """Fetch chunk details from database by FAISS IDs."""
@@ -855,6 +929,7 @@ def fetch_chunks_by_faiss_ids(faiss_ids: List[int], org_id: str) -> List[dict]:
 
 
 @router.post("/tickets/{ticket_id}/chat", response_model=ChatResponse)
+@limiter.limit("10/minute")
 def chat_with_ai(
     ticket_id: str,
     payload: ChatRequest,
@@ -864,6 +939,11 @@ def chat_with_ai(
 ):
     """Generate AI response for a ticket using enhanced RAG with comprehensive observability."""
     org_id = require_org_context(request)
+
+    # Enforce AI query quota (raises 402 if exhausted)
+    from .entitlements import increment_ai_query
+
+    increment_ai_query(org_id)
 
     # Start observability tracking
     observer = get_observer()
@@ -908,11 +988,10 @@ def chat_with_ai(
     clean_query = scrub(payload.query)
     observer.record_embedding_metrics(clean_query, 0)  # Will update with actual timing
 
-    # 4) Retrieve relevant chunks using enhanced RAG with metrics
+    # 4) Retrieve relevant chunks using pgvector search
     retrieval_start = time.time()
     retrieval_result = retrieve(
         clean_query,
-        lambda faiss_ids: fetch_chunks_by_faiss_ids(faiss_ids, org_id),
         org_id=org_id,
     )
     retrieval_latency = int((time.time() - retrieval_start) * 1000)
@@ -933,6 +1012,36 @@ def chat_with_ai(
         len(chunks), scores, retrieval_metrics, retrieval_latency
     )
 
+    # 4b) Similar resolved tickets (J.3) — helps for issues solved before
+    similar_tickets: list = []
+    if chunks:
+        try:
+            from .rag import search_similar_tickets
+
+            _qvec = None
+            # Reuse the query embedding by asking retrieve's caller — cheapest
+            # is one extra embed; acceptable (cached by provider at no extra
+            # cost compared to expansion batch, but kept lazy to avoid re-embed)
+            from .embeddings import embed_texts
+
+            _qvec = embed_texts([clean_query])[0]
+            similar_tickets = search_similar_tickets(
+                org_id, clean_query, _qvec, k=3
+            )
+            if similar_tickets:
+                _ticket_lines = "\n".join(
+                    f"- [{i+1}] Similar past ticket: {t['title']}"
+                    for i, t in enumerate(similar_tickets)
+                )
+                context = (
+                    context
+                    + "\n\nSIMILAR PAST TICKETS (may indicate known solutions):\n"
+                    + _ticket_lines
+                )
+        except Exception as e:
+            logger.warning("Similar-ticket search failed: %s", e)
+            similar_tickets = []
+
     if not chunks:
         # No relevant context found - enhanced escalation handling
         observer.add_warning("No relevant chunks found in knowledge base")
@@ -948,7 +1057,7 @@ def chat_with_ai(
                 response=no_context_response,
                 confidence=0.0,
                 citations_count=0,
-                model=os.getenv("GENAI_MODEL", "gemini-1.5-pro"),
+                model=gen_model(),
                 latency_ms=0,
                 escalation_triggered=True,
             )
@@ -981,7 +1090,7 @@ def chat_with_ai(
                         {
                             "citations": [],
                             "confidence": 0.0,
-                            "model": os.getenv("GENAI_MODEL", "gemini-1.5-pro"),
+                            "model": gen_model(),
                             "suggest_escalation": True,
                             "escalation_info": escalation_info,
                             "retrieval_metrics": {"no_chunks": 1.0},
@@ -1061,30 +1170,58 @@ def chat_with_ai(
 
     # 5) Generate AI response with enhanced structured generation
     generation_start = time.time()
-    try:
-        # Try structured generation first
+
+    # Answer cache — identical prompt (context+query) replays the LLM result
+    # without a generation call (J.4). Message rows are still persisted fresh.
+    prompt_hash = compute_prompt_hash(context, clean_query)
+    cache_key = f"{org_id}:{prompt_hash}"
+    cached = _answer_cache.get(cache_key)
+    if cached and (time.monotonic() - cached[1]) < ANSWER_CACHE_TTL:
+        observer.add_warning("answer_cache_hit")
+        ai_response = cached[0]["ai_response"]
+        confidence_breakdown = cached[0]["confidence_breakdown"]
+        base_confidence = cached[0]["base_confidence"]
+        latency_ms = 0
+    else:
         try:
-            structured_response, latency_ms = generate_structured_completion(
-                context, clean_query, sources
+            # Try structured generation first
+            try:
+                structured_response, latency_ms = generate_structured_completion(
+                    context, clean_query, sources
+                )
+                ai_response = structured_response.response
+
+                # Extract confidence from structured response
+                confidence_breakdown = structured_response.confidence_indicators
+                base_confidence = sum(confidence_breakdown.values()) / len(
+                    confidence_breakdown
+                )
+
+            except Exception as structured_error:
+                observer.add_warning(f"Structured generation failed: {structured_error}")
+                # Fallback to basic generation
+                ai_response, latency_ms = generate_completion(context, clean_query, sources)
+                confidence_breakdown = {}
+                base_confidence = 0.5  # Neutral confidence for fallback
+
+        except Exception as e:
+            observer.add_error(f"AI generation failed: {e}")
+            raise HTTPException(status_code=502, detail=f"AI generation failed: {str(e)}")
+
+        # Store in cache (bounded LRU-ish: evict oldest on overflow)
+        if len(_answer_cache) >= ANSWER_CACHE_MAX:
+            oldest_key = min(
+                _answer_cache, key=lambda k: _answer_cache[k][1]
             )
-            ai_response = structured_response.response
-
-            # Extract confidence from structured response
-            confidence_breakdown = structured_response.confidence_indicators
-            base_confidence = sum(confidence_breakdown.values()) / len(
-                confidence_breakdown
-            )
-
-        except Exception as structured_error:
-            observer.add_warning(f"Structured generation failed: {structured_error}")
-            # Fallback to basic generation
-            ai_response, latency_ms = generate_completion(context, clean_query, sources)
-            confidence_breakdown = {}
-            base_confidence = 0.5  # Neutral confidence for fallback
-
-    except Exception as e:
-        observer.add_error(f"AI generation failed: {e}")
-        raise HTTPException(status_code=502, detail=f"AI generation failed: {str(e)}")
+            _answer_cache.pop(oldest_key, None)
+        _answer_cache[cache_key] = (
+            {
+                "ai_response": ai_response,
+                "confidence_breakdown": confidence_breakdown,
+                "base_confidence": base_confidence,
+            },
+            time.monotonic(),
+        )
 
     generation_latency = int((time.time() - generation_start) * 1000)
 
@@ -1137,7 +1274,7 @@ def chat_with_ai(
         response=ai_response,
         confidence=confidence,
         citations_count=citations_count,
-        model=os.getenv("GENAI_MODEL", "gemini-1.5-pro"),
+        model=gen_model(),
         latency_ms=generation_latency,
         escalation_triggered=should_escalate_flag,
     )
@@ -1166,12 +1303,13 @@ def chat_with_ai(
             "citations": [c.dict() for c in citations],
             "confidence": confidence,
             "confidence_breakdown": confidence_components,
-            "model": os.getenv("GENAI_MODEL", "gemini-1.5-pro"),
+            "model": gen_model(),
             "suggest_escalation": should_escalate_flag,
             "escalation_details": escalation_details,
             "retrieval_metrics": retrieval_metrics,
             "generation_latency_ms": latency_ms,
             "conversation_length": conversation_length,
+            "similar_tickets": similar_tickets,
         }
 
         cursor.execute(
@@ -1259,7 +1397,7 @@ def chat_with_ai(
                 (
                     ticket_id,
                     user.id,
-                    os.getenv("GENAI_MODEL", "gemini-1.5-pro"),
+                    gen_model(),
                     prompt_hash,
                     len(chunks),
                     confidence,
@@ -1339,6 +1477,7 @@ def chat_with_ai(
         citations=citations,
         confidence=confidence,
         suggest_escalation=should_escalate_flag,
+        similar_tickets=similar_tickets,
     )
 
 
@@ -1426,6 +1565,45 @@ def resolve_ticket(
     _title = row["title"]
     _created_by = str(row["created_by"]) if row.get("created_by") else None
     _note = payload.resolution_note
+
+    # Embed resolved ticket for similar-ticket retrieval (J.3, fire-and-forget)
+    def _embed_resolved():
+        try:
+            with get_db_connection() as ec:
+                ec_cur = ec.cursor()
+                ec_cur.execute(
+                    "SELECT title, description, resolution_note FROM app.tickets WHERE id = %s",
+                    (_tid,),
+                )
+                trow = ec_cur.fetchone()
+            if not trow:
+                return
+            text = " ".join(
+                filter(
+                    None,
+                    [
+                        trow.get("title"),
+                        trow.get("description"),
+                        trow.get("resolution_note"),
+                    ],
+                )
+            )[:4000]
+            if not text.strip():
+                return
+            from .embeddings import embed_texts
+
+            vec = embed_texts([text])[0]
+            with get_db_connection() as uc:
+                uc_cur = uc.cursor()
+                uc_cur.execute(
+                    "UPDATE app.tickets SET title_embedding = %s::vector WHERE id = %s",
+                    (str(list(vec)), _tid),
+                )
+                uc.commit()
+        except Exception as e:
+            logger.warning("Resolved-ticket embedding failed for %s: %s", _tid, e)
+
+    threading.Thread(target=_embed_resolved, daemon=True).start()
 
     def _notify_resolved():
         try:

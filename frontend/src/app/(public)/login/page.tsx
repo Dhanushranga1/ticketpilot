@@ -88,7 +88,7 @@ function LoginPageInner() {
     const { error } = await supabase.auth.signInWithOtp({
       email,
       options: {
-        emailRedirectTo: `${window.location.origin}/auth/callback${next}`,
+        emailRedirectTo: `${window.location.origin}/auth/confirm${next}`,
       },
     });
     setMagicLoading(false);

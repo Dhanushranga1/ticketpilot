@@ -347,6 +347,12 @@ function TicketsPageInner() {
   // Debounce search input — avoids an API call on every keystroke
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedSearch(searchTerm), 300);
+
+    // Auto-open create dialog when arriving via ?new=1 (e.g. dashboard CTA)
+    if (typeof window !== 'undefined' && window.location.search.includes('new=1')) {
+      setNewTicketOpen(true);
+      window.history.replaceState({}, '', window.location.pathname);
+    }
     return () => clearTimeout(timer);
   }, [searchTerm]);
 

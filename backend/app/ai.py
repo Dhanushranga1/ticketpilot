@@ -7,7 +7,7 @@ import hashlib
 import json
 import logging
 import time
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 from pydantic import BaseModel, ValidationError
@@ -285,3 +285,74 @@ def generate_completion(
 
 def compute_prompt_hash(context: str, question: str) -> str:
     return hashlib.sha256(f"{context}\n---\n{question}".encode()).hexdigest()[:16]
+
+
+QUERY_EXPANSION_PROMPT = """Rewrite the user's support query into 2-3 alternative search queries that would
+match knowledge base articles better. Fix spelling, expand abbreviations (e.g. VPN →
+virtual private network), and rephrase informally written questions into technical
+terms. Keep each query under 12 words.
+
+Respond with VALID JSON only, matching this exact schema:
+{"queries": ["original intent query", "alternative query", "alternative query"]}"""
+
+
+def expand_query(query: str) -> List[str]:
+    """
+    Expand a user query into alternative search queries via one cheap LLM call.
+    Returns [original, ...alternatives] — on any failure returns [original] so
+    retrieval degrades gracefully.
+    """
+    try:
+        text = _call_llm(
+            f"{QUERY_EXPANSION_PROMPT}\n\nUSER QUERY: {query}", json_mode=True
+        )
+        cleaned = text.strip()
+        if cleaned.startswith("```json"):
+            cleaned = cleaned[7:]
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
+        data = json.loads(cleaned)
+        alternatives = [str(q).strip() for q in data.get("queries", []) if str(q).strip()]
+        # Dedupe, keep original first, cap total at 3
+        seen = {query}
+        out = [query]
+        for alt in alternatives:
+            if alt not in seen and len(out) < 3:
+                seen.add(alt)
+                out.append(alt)
+        return out
+    except Exception as e:
+        logger.warning("Query expansion failed (%s) — using original query", e)
+        return [query]
+
+
+KB_DRAFT_PROMPT = """You are writing a knowledge base article for an internal IT knowledge base.
+Summarize the conversation below into a reusable how-to article.
+
+Respond with VALID JSON only, matching this exact schema:
+{
+  "title": "Short descriptive article title (max 80 chars)",
+  "content": "Markdown-formatted article covering the problem, resolution steps, and notes. 200-600 words."
+}
+
+GUIDELINES:
+- Strip customer names, emails, ticket IDs, and any PII
+- Write steps so a colleague can resolve the same issue next time
+- If the ticket lacks a clear resolution, say so in content and suggest escalation follow-up"""
+
+
+def generate_kb_draft(conversation: str) -> Tuple[str, str]:
+    """Generate a KB article draft from a ticket conversation. Returns (title, content)."""
+    prompt = f"{KB_DRAFT_PROMPT}\n\nCONVERSATION:\n{conversation}"
+    try:
+        text = _call_llm(prompt, json_mode=True)
+        cleaned = text.strip()
+        if cleaned.startswith("```json"):
+            cleaned = cleaned[7:]
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
+        data = json.loads(cleaned)
+        return str(data.get("title", "Untitled KB Article")), str(data.get("content", ""))
+    except Exception as e:
+        logger.error("KB draft generation failed: %s", e)
+        raise

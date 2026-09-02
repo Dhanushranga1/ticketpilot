@@ -11,6 +11,7 @@ from typing import Any, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from .auth import User, get_current_user
+from .entitlements import requires_feature
 from .observability import get_rag_analytics
 from .org_middleware import require_org_context
 from .rag_scoring import casper_route, profile_ticket
@@ -145,6 +146,18 @@ async def set_role(
         from .roles import invalidate_cache
 
         invalidate_cache(user_id)
+
+        import asyncio as _aio
+
+        _aio.create_task(
+            log_audit(
+                "user.role.updated",
+                user,
+                resource_type="user_role",
+                resource_id=user_id,
+                metadata={"role": role},
+            )
+        )
 
         return {"ok": True}
     except HTTPException:
@@ -346,15 +359,27 @@ async def db_diagnostics(user: User = Depends(get_current_user)):
 
 
 # Analytics Endpoints
+def _require_org_admin(request: Request) -> str:
+    """Org-scoped admin check — owner or admin of the org in context."""
+    role = getattr(request.state, "user_role_in_org", None)
+    if role not in ("owner", "admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Org admin access required",
+        )
+    return role
+
+
 @router.get("/analytics/summary")
 async def get_analytics_summary(
     request: Request,
     days: int = Query(default=30, ge=1, le=365),
     user: User = Depends(get_current_user),
+    _gate: None = requires_feature("analytics"),
 ):
-    """Get summary analytics for admin dashboard"""
+    """Get summary analytics for the org dashboard (org admin, business plan+)."""
     org_id = require_org_context(request)
-    await require_admin(user)
+    _require_org_admin(request)
 
     try:
         conn = await get_database_connection()
@@ -534,11 +559,13 @@ async def get_activity_feed(
 
 @router.get("/analytics/by-category")
 async def get_analytics_by_category(
-    request: Request, user: User = Depends(get_current_user)
+    request: Request,
+    user: User = Depends(get_current_user),
+    _gate: None = requires_feature("analytics"),
 ):
-    """Get ticket analytics by category/status"""
+    """Get ticket analytics by category/status (org admin, business plan+)."""
     org_id = require_org_context(request)
-    await require_admin(user)
+    _require_org_admin(request)
 
     try:
         conn = await get_database_connection()
@@ -595,10 +622,11 @@ async def get_top_tags(
     days: int = Query(default=30, ge=1, le=365),
     limit: int = Query(default=8, ge=1, le=20),
     user: User = Depends(get_current_user),
+    _gate: None = requires_feature("analytics"),
 ):
-    """Top ticket tags for the org over the last N days."""
+    """Top ticket tags for the org over the last N days (business plan+)."""
     org_id = require_org_context(request)
-    await require_admin(user)
+    _require_org_admin(request)
     conn = await get_database_connection()
     try:
         rows = await conn.fetch(
@@ -627,10 +655,14 @@ async def get_top_tags(
 
 
 @router.get("/analytics/rep-performance")
-async def get_rep_performance(request: Request, user: User = Depends(get_current_user)):
-    """Get support representative performance metrics"""
+async def get_rep_performance(
+    request: Request,
+    user: User = Depends(get_current_user),
+    _gate: None = requires_feature("analytics"),
+):
+    """Get support representative performance metrics (business plan+)."""
     org_id = require_org_context(request)
-    await require_admin(user)
+    _require_org_admin(request)
 
     conn = await get_database_connection()
     try:
@@ -900,12 +932,13 @@ async def admin_list_organizations(
                 o.slug,
                 o.is_active,
                 o.created_at,
+                o.plan_id,
                 COUNT(om.user_id) AS member_count,
                 COUNT(t.id)       AS ticket_count
             FROM app.organizations o
             LEFT JOIN app.organization_members om ON om.organization_id = o.id
             LEFT JOIN app.tickets t              ON t.organization_id   = o.id
-            GROUP BY o.id, o.name, o.slug, o.is_active, o.created_at
+            GROUP BY o.id, o.name, o.slug, o.is_active, o.created_at, o.plan_id
             ORDER BY o.created_at DESC
             LIMIT $1 OFFSET $2
         """,
@@ -954,6 +987,40 @@ async def admin_update_organization(
         )
         if not row:
             raise HTTPException(404, "Organisation not found")
+        return dict(row)
+    finally:
+        await conn.close()
+
+
+@router.patch("/organizations/{org_id}/plan")
+async def admin_update_org_plan(
+    org_id: str,
+    body: dict,
+    user: User = Depends(get_current_user),
+):
+    """Set an organisation's plan (platform admin only, manual plan assignment)."""
+    await require_admin(user)
+    plan_id = (body.get("plan_id") or "").strip().lower()
+    valid_plans = {"community", "starter", "business", "enterprise"}
+    if plan_id not in valid_plans:
+        raise HTTPException(400, f"Invalid plan. Must be one of: {sorted(valid_plans)}")
+
+    from ..entitlements import _cache as _ent_cache
+
+    conn = await _get_db()
+    try:
+        row = await conn.fetchrow(
+            """UPDATE app.organizations
+               SET plan_id = $1, updated_at = NOW()
+               WHERE id = $2
+               RETURNING id::text, name, plan_id""",
+            plan_id,
+            org_id,
+        )
+        if not row:
+            raise HTTPException(404, "Organisation not found")
+        # Invalidate entitlements cache so the new plan applies immediately
+        _ent_cache.pop(org_id, None)
         return dict(row)
     finally:
         await conn.close()
@@ -1290,13 +1357,13 @@ async def get_audit_log(
                 "limit": limit,
             }
         except Exception:
-            # Table doesn't exist yet — return empty result
+            # Table missing — migrations auto-apply on startup, this is defensive
             return {
                 "items": [],
                 "total": 0,
                 "offset": offset,
                 "limit": limit,
-                "note": "Audit log table not yet created",
+                "note": "Audit log unavailable",
             }
     finally:
         await conn.close()

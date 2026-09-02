@@ -84,24 +84,33 @@ export function SystemHealthDashboard() {
       }
 
       // Fetch all health data in parallel
-      const [kbData, analyticsData] = await Promise.all([
+      const [kbData, analyticsData, ragData] = await Promise.all([
         apiGet<KBStats>('/api/kb/stats', token).catch(() => null),
         apiGet<AdminAnalytics>('/api/admin/analytics/summary', token).catch(
           () => null
         ),
+        apiGet<{
+          total_operations: number;
+          avg_confidence: number;
+          escalation_rate: number;
+          feedback?: {
+            positive: number;
+            negative: number;
+            positive_rate: number | null;
+          };
+        }>('/api/admin/analytics/rag', token).catch(() => null),
       ]);
 
       setKbStats(kbData);
       setAnalytics(analyticsData);
 
-      // Calculate AI metrics from analytics data
-      // Note: In production, this would come from a dedicated AI metrics endpoint
-      if (analyticsData) {
+      // Real AI metrics from the RAG analytics endpoint (ai_runs + ai_feedback)
+      if (ragData) {
         setAiMetrics({
-          totalAIResponses: Math.floor(analyticsData.total_tickets * 0.8), // Estimate
-          averageConfidence: 0.78, // This would come from aggregating AI feedback
-          escalationRate: 1 - analyticsData.resolution_rate,
-          positiveFeedbackRate: 0.82, // This would come from ai_feedback table
+          totalAIResponses: ragData.total_operations ?? 0,
+          averageConfidence: ragData.avg_confidence ?? 0,
+          escalationRate: ragData.escalation_rate ?? 0,
+          positiveFeedbackRate: ragData.feedback?.positive_rate ?? 0,
         });
       }
 
