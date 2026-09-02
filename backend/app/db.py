@@ -80,7 +80,7 @@ async def init_pool() -> None:
         _pool = await asyncpg.create_pool(
             database_url,
             password=db_password,
-            min_size=0,
+            min_size=1,  # keep 1 warm conn — min_size=0 made every idle request pay full connect latency
             max_size=3,
             max_inactive_connection_lifetime=300.0,
             command_timeout=8,
