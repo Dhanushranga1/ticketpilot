@@ -92,7 +92,12 @@ async def init_pool() -> None:
                 "statement_timeout": "8000",
             },
         )
-        logger.info("[db] asyncpg pool ready (min=0, max=3, ssl=%s)", ssl)
+        logger.info(
+            "[db] asyncpg pool ready (min_size=%d, max_size=%d, ssl=%s)",
+            1,
+            3,
+            ssl,
+        )
         await _circuit_success()
     except Exception as exc:
         logger.error(

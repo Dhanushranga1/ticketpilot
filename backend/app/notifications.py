@@ -92,14 +92,13 @@ async def list_notifications(
     """Return the user's latest notifications + unread count."""
     conn = await get_connection()
     try:
-        unread = await conn.fetchval(
-            "SELECT COUNT(*) FROM app.notifications WHERE user_id=$1 AND read_at IS NULL",
-            user.id,
-        )
+        # Single round trip — COUNT(*) FILTER as window fn avoids a second
+        # statement (each statement = ~900ms RTT to the Supabase pooler)
         rows = await conn.fetch(
             """
             SELECT id::text, type, title, body, ref_type, ref_id,
-                   org_id::text, read_at, created_at
+                   org_id::text, read_at, created_at,
+                   COUNT(*) FILTER (WHERE read_at IS NULL) OVER () AS unread_total
             FROM app.notifications
             WHERE user_id = $1
             ORDER BY created_at DESC
@@ -108,10 +107,12 @@ async def list_notifications(
             user.id,
             limit,
         )
-        return {
-            "unread": int(unread),
-            "items": [dict(r) for r in rows],
-        }
+        unread = rows[0]["unread_total"] if rows else 0
+        items = [
+            {k: v for k, v in dict(r).items() if k != "unread_total"}
+            for r in rows
+        ]
+        return {"unread": int(unread), "items": items}
     except Exception:
         # Table may not exist on older deploys
         return {"unread": 0, "items": []}
