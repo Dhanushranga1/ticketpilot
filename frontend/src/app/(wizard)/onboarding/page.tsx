@@ -340,10 +340,19 @@ function Step2({
         },
         body: form,
       });
-      if (!res.ok) throw new Error(await res.text());
+      if (res.status === 402) {
+        setError(
+          'Knowledge Base needs the Starter plan. Skip for now — we can turn it on for your pilot.'
+        );
+        return;
+      }
+      if (!res.ok) {
+        setError('Upload failed — AI keys may not be configured yet.');
+        return;
+      }
       setDone(true);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Upload failed');
+      setError('Upload failed — AI keys may not be configured yet.');
     } finally {
       setUploading(false);
     }
