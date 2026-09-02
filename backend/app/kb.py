@@ -171,6 +171,10 @@ async def ingest(
             conn.commit()
             _log.info("[kb] commit done")
 
+            from .tickets import invalidate_answer_cache
+
+            invalidate_answer_cache(org_id)
+
             import asyncio
             from .admin import log_audit
             asyncio.create_task(log_audit(
@@ -261,6 +265,10 @@ async def delete_document(
 
     if not deleted:
         raise HTTPException(404, "Document not found in this organization")
+
+    from .tickets import invalidate_answer_cache
+
+    invalidate_answer_cache(org_id)
 
     import asyncio
     from .admin import log_audit

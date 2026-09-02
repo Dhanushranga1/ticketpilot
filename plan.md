@@ -268,6 +268,65 @@
 
 ---
 
+## Phase I — Auth modernization (Supabase SSR)
+
+**Goal:** modern Next.js Supabase pattern — cookie sessions, server-side guards.
+
+### I.1 @supabase/ssr migration
+- Browser client via `@supabase/ssr` (`src/lib/supabase/client.ts`) — HTTP-only cookie sessions replace localStorage
+- Server client (`src/lib/supabase/server.ts`) for RSC/server-side reads
+- `src/lib/supabaseClient.ts` re-exports browser client — legacy import path, all `supabase.auth.*` call sites unchanged
+
+### I.2 Middleware route protection
+- `src/middleware.ts` — server-side session refresh + guards: `/dashboard`, `/tickets`, `/kb`, `/rep`, `/admin`, `/settings`, `/analytics`, `/activity`, `/account`, `/organizations`, `/onboarding`, `/platform`
+- Unauthenticated → `/login?redirect=<path>` (matches login page's existing param)
+- Logged-in users hitting `/login` or `/signup` → `/dashboard`
+- `/invite/[token]` intentionally NOT protected — invite page handles guests itself
+
+### I.3 SSR magic-link confirmation
+- `/auth/confirm/route.ts` — server-side `verifyOtp` with cookie storage
+- Existing client callback page kept as fallback (still works)
+
+### I.4 Verification
+- Live smoke: `/dashboard` → 307 → `/login?redirect=%2Fdashboard`; `/login` + `/` → 200
+- Build compiles with middleware (93.5 kB bundle)
+- 48 frontend + 105 backend tests pass
+
+---
+
+## Phase J — Hybrid RAG (CASPER v2)
+
+**Goal:** semantic-only retrieval → hybrid ensemble. Lexical + fuzzy + vector fused with RRF; query expansion; similar-ticket memory; answer cache.
+
+### J.1 Hybrid retrieval (RRF)
+- Migration `0033_hybrid_retrieval.sql` — pg_trgm ext, `chunks.text_search` (generated tsvector + GIN), trigram GIN on chunk text, `tickets.text_search` + refresh trigger, `tickets.title_embedding vector(768)` + HNSW
+- `rag.py` — `hybrid_search_chunks()`: RRF fusion (k=60) of pgvector cosine + `websearch_to_tsquery` full-text + pg_trgm similarity; uniform cosine `score` recomputed so MIN_SCORE filtering stays valid
+- Lexical/trigram failures degrade to vector-only (try/except per source)
+
+### J.2 Query expansion
+- `ai.py` — `expand_query()`: one cheap LLM call rewrites query into ≤3 search queries (fixes spelling, expands acronyms, technical rephrasing); failure → original only
+- `retrieve()` — embeds all expansions in one batch, hybrid-search each, cross-query RRF merge; `RAG_QUERY_EXPANSION=0` disables
+- retrieval_metrics now reports `queries_used`
+
+### J.3 Similar past tickets
+- Resolve endpoint embeds title+description+resolution_note (background thread) → `tickets.title_embedding`
+- `rag.py` — `search_similar_tickets()`: RRF over ticket embedding + ticket full-text; top 3 resolved/closed tickets
+- Chat flow appends "SIMILAR PAST TICKETS" section to LLM context; `ChatResponse.similar_tickets` + message meta carry them
+
+### J.4 Answer cache
+- `tickets.py` — in-memory LRU keyed `org_id:prompt_hash` (TTL 600s, max 500 entries); cache hit skips LLM call, still persists fresh message row
+- Invalidated per-org on KB ingest + doc delete
+
+### J.5 Tests
+- `backend/tests/test_rag.py` — 13 tests: RRF fusion ranking, trigram inclusion, empty results, lexical-failure degradation, expansion (success/dedup/failure/garbage), similar tickets, cache invalidation
+- Fixed latent import bug: `rag.py` imported nonexistent `_embed_dim` (broke all `app.rag` imports since Phase B — lazy imports hid it)
+
+### J.6 Verification
+- 118 backend + 48 frontend tests pass, type-check clean
+- Migration 0033 applied on Supabase dev DB (1/1, 0 failed)
+
+---
+
 ## Phase G — Next Strata products (post-feedback)
 
 **Goal:** after TicketPilot pilots validate the platform, build the next tasteable module.
@@ -305,4 +364,6 @@
 | E — AI + Agents | ✅ | Rep AI gated + feedback wired, Send-to-Customer agent action, KB-draft-from-ticket agent action. |
 | F — Pilot Kit | ✅ | Plan dropdown (admin), UpgradeBanner contact-us, AI status step in wizard, README stack claims fixed. |
 | H — Pilot Hardening | ✅ | FAISS fully removed, embeddings per-call provider, dim 768, CI Node 20 + coverage ratchet, AI feedback analytics, analytics gating, seed fix, Supabase dev smoke green. |
+| I — Auth SSR | ✅ | @supabase/ssr cookie sessions, middleware route guards, /auth/confirm SSR verifyOtp, legacy supabaseClient re-export. |
+| J — Hybrid RAG | ✅ | RRF fusion (vector+tsvector+trigram), LLM query expansion, similar-ticket retrieval, answer cache. 118 backend tests. |
 | G — Next Modules | ⬜ | AssetLog → ContractVault → Platform Hub. |

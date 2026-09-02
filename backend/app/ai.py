@@ -7,7 +7,7 @@ import hashlib
 import json
 import logging
 import time
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 from pydantic import BaseModel, ValidationError
@@ -285,6 +285,45 @@ def generate_completion(
 
 def compute_prompt_hash(context: str, question: str) -> str:
     return hashlib.sha256(f"{context}\n---\n{question}".encode()).hexdigest()[:16]
+
+
+QUERY_EXPANSION_PROMPT = """Rewrite the user's support query into 2-3 alternative search queries that would
+match knowledge base articles better. Fix spelling, expand abbreviations (e.g. VPN →
+virtual private network), and rephrase informally written questions into technical
+terms. Keep each query under 12 words.
+
+Respond with VALID JSON only, matching this exact schema:
+{"queries": ["original intent query", "alternative query", "alternative query"]}"""
+
+
+def expand_query(query: str) -> List[str]:
+    """
+    Expand a user query into alternative search queries via one cheap LLM call.
+    Returns [original, ...alternatives] — on any failure returns [original] so
+    retrieval degrades gracefully.
+    """
+    try:
+        text = _call_llm(
+            f"{QUERY_EXPANSION_PROMPT}\n\nUSER QUERY: {query}", json_mode=True
+        )
+        cleaned = text.strip()
+        if cleaned.startswith("```json"):
+            cleaned = cleaned[7:]
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
+        data = json.loads(cleaned)
+        alternatives = [str(q).strip() for q in data.get("queries", []) if str(q).strip()]
+        # Dedupe, keep original first, cap total at 3
+        seen = {query}
+        out = [query]
+        for alt in alternatives:
+            if alt not in seen and len(out) < 3:
+                seen.add(alt)
+                out.append(alt)
+        return out
+    except Exception as e:
+        logger.warning("Query expansion failed (%s) — using original query", e)
+        return [query]
 
 
 KB_DRAFT_PROMPT = """You are writing a knowledge base article for an internal IT knowledge base.

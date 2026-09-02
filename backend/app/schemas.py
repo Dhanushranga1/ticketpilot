@@ -114,6 +114,7 @@ class ChatResponse(BaseModel):
     citations: List[Citation]
     confidence: float
     suggest_escalation: bool
+    similar_tickets: List[dict] = []
 
 
 # Phase 5: Rep Console schemas
